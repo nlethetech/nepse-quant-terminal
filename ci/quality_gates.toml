@@ -1,0 +1,22 @@
+[data_freshness]
+max_staleness_days = 3
+min_symbol_count = 150
+
+[ingestion]
+require_recent_run = true
+max_run_age_hours = 26
+accepted_status = ["SUCCESS", "PARTIAL"]
+
+[backtest]
+start_date = "2024-01-01"
+end_date = "2025-12-31"
+holding_days = 40
+max_positions = 5
+signals = ["volume", "quality", "low_vol"]
+min_trades = 15
+min_sharpe = 0.40
+min_win_rate = 0.35
+max_drawdown = -0.65
+
+[timeouts]
+leakage_seconds = 600

@@ -1,0 +1,13 @@
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+personality = "pragmatic"
+
+[mcp_servers.nepse_control_plane_stdio]
+command = "<PROJECT_ROOT>/scripts/mcp/run_stdio_server.sh"
+
+[mcp_servers.nepse_control_plane_stdio.env]
+NEPSE_MCP_TRADING_MODE = "paper"
+NEPSE_MCP_DRY_RUN = "true"
+
+[mcp_servers.nepse_control_plane_http]
+url = "http://127.0.0.1:8765/mcp"

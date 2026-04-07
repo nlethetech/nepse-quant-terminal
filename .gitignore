@@ -1,0 +1,60 @@
+# === Secrets & credentials ===
+.env
+.env.*
+!.env.example
+
+# === Databases ===
+*.db
+*.sqlite
+*.sqlite3
+
+# === Data directory (runtime state, caches, databases, CSVs) ===
+data/
+
+# === Artifacts (generated reports, screenshots) ===
+artifacts/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+.eggs/
+
+# === Virtual environments ===
+venv/
+.venv/
+env/
+ENV/
+
+# === Testing ===
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# === Logs ===
+*.log
+logs/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === IDEs ===
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# === Jupyter ===
+.ipynb_checkpoints/
+
+# === Node (if any frontend tooling) ===
+node_modules/

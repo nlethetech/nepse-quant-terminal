@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "nepse-control-plane": {
+      "command": "<PROJECT_ROOT>/scripts/mcp/run_stdio_server.sh",
+      "env": {
+        "NEPSE_MCP_TRADING_MODE": "paper",
+        "NEPSE_MCP_DRY_RUN": "true"
+      }
+    }
+  }
+}

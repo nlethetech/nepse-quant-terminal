@@ -1,0 +1,20 @@
+{
+  "name": "nepse-control-plane",
+  "transport": "streamable-http",
+  "url": "http://127.0.0.1:8765/mcp",
+  "headers": {},
+  "notes": {
+    "launch_server": "./scripts/mcp/run_http_server.sh",
+    "default_mode": "paper",
+    "safe_live_mode": "shadow_live",
+    "agent_tab_bridge_tools": [
+      "get_agent_tab_state",
+      "publish_agent_analysis",
+      "append_agent_chat_message"
+    ],
+    "recommended_env": {
+      "NEPSE_MCP_TRADING_MODE": "paper",
+      "NEPSE_MCP_DRY_RUN": "true"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+streamlit==1.51.0
+pandas==2.3.3
+numpy==2.3.5
+plotly==6.5.0
+scipy==1.16.3
+scikit-learn==1.7.2
+statsmodels==0.14.5
+arch==7.2.0
+requests==2.32.5
+beautifulsoup4==4.14.2
+tenacity==9.1.2
+feedparser==6.0.12
+tqdm==4.67.1
+numba==0.62.1
+pytest==9.0.1
+rich==14.3.1
+python-telegram-bot==22.6
+matplotlib==3.10.8
+playwright==1.54.0
+mcp==1.27.0
+mlx-lm==0.31.1
+mlx-vlm==0.4.4
+pytesseract==0.3.13
+Pillow==11.3.0
+PyMuPDF==1.26.6
+opencv-python-headless==4.10.0.84
+nepse @ git+https://github.com/basic-bgnr/NepseUnofficialApi.git@2f09fbfdcbaf23545d5755b6f11b367324d5b8a4
