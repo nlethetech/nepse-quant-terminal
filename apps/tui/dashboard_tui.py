@@ -4518,6 +4518,8 @@ class NepseDashboard(App):
 
     def _load_agent_runtime_state(self) -> None:
         self._agent_analysis = load_agent_analysis() or {}
+        if str((self._agent_analysis or {}).get("account_id") or "") != str(getattr(self, "_current_account_id", "account_1") or "account_1"):
+            self._agent_analysis = {}
         all_recent = list(load_agent_history() or [])
         visible_cutoff = float(getattr(self, "_agent_visible_since", 0.0) or 0.0)
         self._agent_history, self._agent_hidden_recent_history = _split_agent_messages_by_cutoff(all_recent, visible_cutoff)

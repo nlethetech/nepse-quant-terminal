@@ -442,14 +442,19 @@ def publish_external_agent_analysis(
     """Publish external agent analysis into the same runtime file the TUI uses."""
     payload = dict(analysis or {})
     now_utc = datetime.now(timezone.utc)
+    account = _active_account_context()
     payload.setdefault("timestamp", time.time())
     payload.setdefault("context_date", now_utc.strftime("%Y-%m-%d"))
+    payload.setdefault("account_id", str(account.get("id") or "account_1"))
+    payload.setdefault("account_name", str(account.get("name") or payload.get("account_id") or "account_1"))
     meta = dict(payload.get("agent_runtime_meta") or {})
     meta.update(
         {
             "source": source,
             "provider": provider,
             "updated_at": now_utc.replace(microsecond=0).isoformat(),
+            "account_id": payload.get("account_id"),
+            "account_name": payload.get("account_name"),
         }
     )
     payload["source"] = source
@@ -761,7 +766,10 @@ def _analysis_cache_is_fresh(analysis: dict | None) -> bool:
     age = time.time() - float(payload.get("timestamp") or 0.0)
     if age > ANALYSIS_CACHE_MAX_AGE_SECS:
         return False
-    return str(payload.get("context_date") or "") == _current_nst_session_date()
+    if str(payload.get("context_date") or "") != _current_nst_session_date():
+        return False
+    active_account_id = str(_active_account_context().get("id") or "account_1")
+    return str(payload.get("account_id") or "") == active_account_id
 
 
 def _clip_text(value: object, limit: int = 140) -> str:
@@ -867,6 +875,34 @@ def _summarize_symbol_intelligence(symbol: str, intel: dict | None) -> str:
             f"[{rel.get('source_name') or '?'}]"
         )
     return "\n    ".join(parts)
+
+
+def _sector_key(value: object) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", str(value or "").upper()).strip("_")
+
+
+def _summarize_sector_intelligence(sector: str, intel: dict | None) -> str:
+    payload = dict(intel or {})
+    stories = list(payload.get("story_items") or [])
+    social = list(payload.get("social_items") or [])
+    if not stories and not social:
+        return f"{sector}: no direct 24h NepalOSINT sector hit."
+    parts = [
+        f"{sector}: {int(payload.get('story_count') or 0)} story hits, {int(payload.get('social_count') or 0)} social hits in the last {AGENT_OSINT_DECISION_HOURS}h.",
+    ]
+    if stories:
+        lead = dict(stories[0] or {})
+        parts.append(
+            f"Lead sector story: {_clip_text(lead.get('title'), 110)} "
+            f"[{lead.get('source_name') or '?'}] {(lead.get('published_at') or '')[:16]}"
+        )
+    elif social:
+        lead = dict(social[0] or {})
+        parts.append(
+            f"Lead sector social: {_clip_text(lead.get('text'), 110)} "
+            f"[@{lead.get('author_username') or '?'}]"
+        )
+    return " ".join(parts)
 
 
 def _fetch_energy_quote(symbol: str, label: str) -> Optional[dict]:
@@ -1011,6 +1047,7 @@ def _fallback_stock_decision(
     *,
     metrics: dict | None,
     intel: dict | None,
+    sector_intel: dict | None,
     is_held: bool,
     preview_mode: bool,
 ) -> dict:
@@ -1102,8 +1139,22 @@ def _fallback_stock_decision(
     if story_items or social_items:
         base_conviction += min(0.01 * (len(story_items) + len(social_items)), 0.05)
 
+    sector_payload = dict(sector_intel or {})
+    sector_story_items = list(sector_payload.get("story_items") or [])
+    sector_social_items = list(sector_payload.get("social_items") or [])
+    top_sector_story = dict(sector_story_items[0] or {}) if sector_story_items else {}
+    top_sector_social = dict(sector_social_items[0] or {}) if sector_social_items else {}
+    sector_bias = _osint_keyword_bias(
+        top_sector_story.get("title"),
+        top_sector_story.get("summary"),
+        top_sector_social.get("text"),
+    )
+    base_conviction += sector_bias * 0.6
+    if sector_story_items or sector_social_items:
+        base_conviction += min(0.005 * (len(sector_story_items) + len(sector_social_items)), 0.03)
+
     conviction = _clamp_conviction(max(0.15, min(0.95, base_conviction)))
-    severe_negative = bool(red_flags) or osint_bias <= -0.08 or npl_pct > 5 or pe_ratio > 35 or pbv_ratio > 5
+    severe_negative = bool(red_flags) or osint_bias <= -0.08 or sector_bias <= -0.08 or npl_pct > 5 or pe_ratio > 35 or pbv_ratio > 5
 
     if is_held:
         verdict = "REJECT" if severe_negative and conviction < 0.72 else "HOLD"
@@ -1116,10 +1167,13 @@ def _fallback_stock_decision(
             verdict = "REJECT"
 
     lead_story = _clip_text(top_story.get("title"), 96) if top_story else ""
+    sector_lead = _clip_text(top_sector_story.get("title"), 96) if top_sector_story else ""
     if not evidence_parts and sig.get("reasoning"):
         evidence_parts.append(_clip_text(sig.get("reasoning"), 84))
     if lead_story:
         evidence_parts.append(f"OSINT lead: {lead_story}")
+    if sector_lead:
+        evidence_parts.append(f"sector lead: {sector_lead}")
 
     bull_case = merged.get("bull_case") or (
         f"Quant setup is supported by {_clip_text(', '.join(evidence_parts), 110)}."
@@ -1128,10 +1182,12 @@ def _fallback_stock_decision(
     )
     bear_case = merged.get("bear_case") or (
         "; ".join(red_flags[:2]) if red_flags else
-        (f"OSINT tone is negative around {_clip_text(top_story.get('title'), 80)}." if osint_bias < -0.04 and top_story else
+        (f"Sector tone is weak around {_clip_text(top_sector_story.get('title'), 80)}." if sector_bias < -0.04 and top_sector_story else
+         f"OSINT tone is negative around {_clip_text(top_story.get('title'), 80)}." if osint_bias < -0.04 and top_story else
          f"Signal strength {strength:.2f} still needs confirmation.")
     )
     what_matters = merged.get("what_matters") or (
+        _clip_text(f"Sector context: {sector_lead}", 120) if sector_lead and abs(sector_bias) >= max(abs(osint_bias), 0.05) else
         _clip_text(lead_story, 120) if lead_story else
         _clip_text(", ".join(evidence_parts), 120) if evidence_parts else
         _clip_text(sig.get("reasoning"), 120)
@@ -1139,7 +1195,8 @@ def _fallback_stock_decision(
     reasoning = merged.get("reasoning") or (
         f"{symbol} scores {score:.2f} with {confidence:.0%} signal confidence. "
         f"Financial read: {_clip_text(_format_metrics({'symbol': symbol, **metrics}), 180) or 'limited recent filing data'}. "
-        f"NepalOSINT: {_clip_text(_summarize_symbol_intelligence(symbol, intel), 200)}."
+        f"NepalOSINT: {_clip_text(_summarize_symbol_intelligence(symbol, intel), 200)}. "
+        f"Sector check: {_clip_text(_summarize_sector_intelligence(str(metrics.get('sector') or 'Unknown'), sector_payload), 180)}."
     )
 
     merged.update(
@@ -1239,6 +1296,7 @@ def _gather_context() -> dict:
     # 2. NepalOSINT semantic + unified + related-story search per shortlisted stock
     try:
         symbol_intel: dict[str, dict] = {}
+        sector_intel: dict[str, dict] = {}
         embeddings_context = []
         for s in context.get("signals", []):
             sym = str(s.get("symbol") or "").upper()
@@ -1246,12 +1304,22 @@ def _gather_context() -> dict:
                 continue
             intel = symbol_intelligence(
                 sym,
-                hours=720,
+                hours=AGENT_OSINT_DECISION_HOURS,
                 top_k=6,
                 min_similarity=0.45,
                 base_url=OSINT_BASE,
             )
             symbol_intel[sym] = intel
+            sector_name = str(dict(context.get("signal_metrics") or {}).get(sym, {}).get("sector") or "").strip()
+            sector_key = _sector_key(sector_name)
+            if sector_name and sector_key and sector_key not in sector_intel:
+                sector_intel[sector_key] = symbol_intelligence(
+                    sector_name,
+                    hours=AGENT_OSINT_DECISION_HOURS,
+                    top_k=4,
+                    min_similarity=0.45,
+                    base_url=OSINT_BASE,
+                )
             for item in list(dict(intel.get("semantic") or {}).get("results") or [])[:3]:
                 title = str(item.get("title") or "")
                 if title:
@@ -1265,9 +1333,11 @@ def _gather_context() -> dict:
                         }
                     )
         context["symbol_intelligence"] = symbol_intel
+        context["sector_intelligence"] = sector_intel
         context["embeddings"] = embeddings_context
     except Exception as e:
         context["symbol_intelligence"] = {}
+        context["sector_intelligence"] = {}
         context["embeddings"] = []
         context["embeddings_error"] = str(e)
 
@@ -1349,6 +1419,10 @@ def _merge_agent_output_with_shortlist(parsed: dict, ctx: dict) -> dict:
         str(key).upper(): dict(value or {})
         for key, value in dict(ctx.get("symbol_intelligence") or {}).items()
     }
+    sector_intel_map = {
+        str(key).upper(): dict(value or {})
+        for key, value in dict(ctx.get("sector_intelligence") or {}).items()
+    }
     preview_mode = bool(parsed.get("_preview")) or (
         parsed.get("trade_today") is None
         and not str(parsed.get("market_view") or "").strip()
@@ -1369,6 +1443,7 @@ def _merge_agent_output_with_shortlist(parsed: dict, ctx: dict) -> dict:
             dict(parsed_rows.get(symbol) or {}),
             metrics=metrics_map.get(symbol),
             intel=intel_map.get(symbol),
+            sector_intel=sector_intel_map.get(_sector_key(metrics_map.get(symbol, {}).get("sector"))),
             is_held=is_held,
             preview_mode=preview_mode,
         )
@@ -1530,6 +1605,25 @@ def analyze(force: bool = False) -> dict:
         if len(lines) > 1:
             symbol_intelligence_text = "\n".join(lines) + "\n"
 
+    sector_intelligence_text = ""
+    sector_intel_map = {
+        str(key).upper(): dict(value or {})
+        for key, value in dict(ctx.get("sector_intelligence") or {}).items()
+    }
+    if sector_intel_map:
+        lines = [f"SECTOR NEPALOSINT INTELLIGENCE (last {AGENT_OSINT_DECISION_HOURS}h):"]
+        seen: set[str] = set()
+        for s in ctx.get("signals", []):
+            sym = str(s.get("symbol") or "").upper()
+            sector_name = str(metrics_map.get(sym, {}).get("sector") or "").strip()
+            sector_key = _sector_key(sector_name)
+            if not sector_name or not sector_key or sector_key in seen:
+                continue
+            seen.add(sector_key)
+            lines.append(f"  {_summarize_sector_intelligence(sector_name, sector_intel_map.get(sector_key))}")
+        if len(lines) > 1:
+            sector_intelligence_text = "\n".join(lines) + "\n"
+
     macro_text = _format_macro_context(ctx.get("macro_market"))
 
     schedule = get_market_schedule()
@@ -1558,6 +1652,7 @@ MARKET STATE:
 {news_text}
 {embeddings_text}
 {symbol_intelligence_text}
+{sector_intelligence_text}
 {macro_text}
 
 INSTRUCTIONS:
@@ -1573,6 +1668,7 @@ INSTRUCTIONS:
    - WHAT MATTERS: One sentence — "What actually matters for this stock right now is..."
    - Review ALL shortlisted stocks in rank order. Do not skip any real stock.
    - HOLD is only valid for symbols already present in ACTIVE ACCOUNT HOLDINGS. If a stock is not currently held in the active account, the final stance must resolve to APPROVE or REJECT.
+   - You must explicitly check the last {AGENT_OSINT_DECISION_HOURS}h of NepalOSINT symbol and sector news before deciding. If sector news is negative, that is a real headwind even when the stock-specific chart looks good.
 
 3. PORTFOLIO RISK CHECK: Are we overexposed to any sector? Should we trim anything?
 

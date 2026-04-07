@@ -273,15 +273,23 @@ def test_analysis_cache_requires_current_session_and_recent_timestamp(monkeypatc
         lambda: 1_000.0,
         raising=False,
     )
+    monkeypatch.setattr(
+        "backend.agents.agent_analyst._active_account_context",
+        lambda: {"id": "account_1", "name": "Account 1"},
+        raising=False,
+    )
 
     assert _analysis_cache_is_fresh(
-        {"stocks": [{"symbol": "NABIL"}], "timestamp": 700.0, "context_date": "2026-04-07"}
+        {"stocks": [{"symbol": "NABIL"}], "timestamp": 700.0, "context_date": "2026-04-07", "account_id": "account_1"}
     ) is True
     assert _analysis_cache_is_fresh(
-        {"stocks": [{"symbol": "NABIL"}], "timestamp": 700.0, "context_date": "2026-04-06"}
+        {"stocks": [{"symbol": "NABIL"}], "timestamp": 700.0, "context_date": "2026-04-06", "account_id": "account_1"}
     ) is False
     assert _analysis_cache_is_fresh(
-        {"stocks": [{"symbol": "NABIL"}], "timestamp": 1.0, "context_date": "2026-04-07"}
+        {"stocks": [{"symbol": "NABIL"}], "timestamp": 1.0, "context_date": "2026-04-07", "account_id": "account_1"}
+    ) is False
+    assert _analysis_cache_is_fresh(
+        {"stocks": [{"symbol": "NABIL"}], "timestamp": 700.0, "context_date": "2026-04-07", "account_id": "account_2"}
     ) is False
 
 

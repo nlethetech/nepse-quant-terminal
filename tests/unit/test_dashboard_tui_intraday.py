@@ -258,6 +258,25 @@ def test_agent_chat_stop_command_invokes_stop_handler():
     assert events == [("stop", True)]
 
 
+def test_load_agent_runtime_state_clears_mismatched_account_analysis(monkeypatch):
+    app = dashboard_tui.NepseDashboard.__new__(dashboard_tui.NepseDashboard)
+    app._current_account_id = "account_1"
+    app._agent_show_archived = False
+    app._agent_visible_since = 0.0
+
+    monkeypatch.setattr(
+        dashboard_tui,
+        "load_agent_analysis",
+        lambda: {"stocks": [{"symbol": "NABIL"}], "account_id": "account_2"},
+    )
+    monkeypatch.setattr(dashboard_tui, "load_agent_history", lambda *args, **kwargs: [])
+    monkeypatch.setattr(dashboard_tui, "load_agent_archive_history", lambda *args, **kwargs: [])
+
+    dashboard_tui.NepseDashboard._load_agent_runtime_state(app)
+
+    assert app._agent_analysis == {}
+
+
 def test_headline_fallback_from_url_rejects_generic_merolagani_detail_url():
     assert dashboard_tui._headline_fallback_from_url(
         "https://merolagani.com/NewsDetail.aspx?newsID=124946"
