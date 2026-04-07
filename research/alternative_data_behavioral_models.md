@@ -2057,7 +2057,7 @@ class SignalType(Enum):
 
 ---
 
-## Sources (Web Research)
+## Sources 
 
 - [Sentiment analysis of Nepali social media text (Springer)](https://link.springer.com/article/10.1007/s13278-025-01508-w)
 - [Application of Nepali LLMs for Sentiment Analysis (ACM)](https://dl.acm.org/doi/fullHtml/10.1145/3647782.3647804)
