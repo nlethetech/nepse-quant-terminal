@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from backend.agents.agent_analyst import (
     _analysis_cache_is_fresh,
+    _build_directional_market_answer,
     _merge_agent_output_with_shortlist,
+    _question_is_directional_market_call,
+    _response_is_hedged_market_call,
     append_external_agent_chat_message,
     load_agent_analysis,
     load_agent_archive_history,
@@ -286,3 +289,20 @@ def test_extract_json_object_from_codex_output():
     payload = extract_json_object('preface {"regime":"unknown","signal_count":0} tail')
 
     assert payload == {"regime": "unknown", "signal_count": 0}
+
+
+def test_directional_market_question_detection_and_fallback():
+    assert _question_is_directional_market_call(
+        "How would NEPSE react after the news of KP Oli's release?"
+    ) is True
+    assert _response_is_hedged_market_call("It depends entirely on the content of the news.") is True
+
+    answer = _build_directional_market_answer(
+        "How would NEPSE react after the news of KP Oli's release?",
+        {"regime": "bull", "fresh_market": {"advancers": 264, "decliners": 3}},
+        {"market_phase": "PREOPEN"},
+        {"bias": 0.08, "stories": [{"title": "KP Oli release eases political uncertainty"}], "social": []},
+    )
+
+    assert answer.startswith("Base case:")
+    assert "pressure" in answer

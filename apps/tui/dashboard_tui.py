@@ -5398,11 +5398,7 @@ class NepseDashboard(App):
         try:
             cmd = [
                 sys.executable,
-                str(PROJECT_ROOT / "scripts" / "agents" / "run_gemma_agent.py"),
-                "--backend",
-                str(os.environ.get("NEPSE_AGENT_BACKEND", "gemma4_mlx") or "gemma4_mlx"),
-                "--fallback",
-                str(os.environ.get("NEPSE_AGENT_FALLBACK_BACKEND", "claude") or "claude"),
+                str(PROJECT_ROOT / "scripts" / "agents" / "run_active_agent.py"),
                 "--question",
                 question,
             ]

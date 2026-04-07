@@ -25,9 +25,14 @@ from typing import Optional
 import pandas as pd
 
 from configs.long_term import LONG_TERM_CONFIG
+from backend.agents.runtime_config import (
+    DEFAULT_GEMMA4_MODEL as RUNTIME_DEFAULT_GEMMA4_MODEL,
+    EXPERIMENTAL_GEMMA4_MODEL as RUNTIME_EXPERIMENTAL_GEMMA4_MODEL,
+    load_active_agent_config,
+)
 from backend.quant_pro.nepse_calendar import current_nepal_datetime, get_market_schedule, market_session_phase
 from backend.quant_pro.control_plane.models import AgentDecision
-from backend.quant_pro.nepalosint_client import symbol_intelligence
+from backend.quant_pro.nepalosint_client import symbol_intelligence, unified_search
 from backend.quant_pro.paths import ensure_dir, get_project_root, get_runtime_dir, migrate_legacy_path
 
 RUNTIME_DIR = ensure_dir(get_runtime_dir(__file__))
@@ -46,14 +51,15 @@ OSINT_BASE = "https://nepalosint.com/api/v1"
 MAX_AGENT_HISTORY_ITEMS = 12
 MAX_AGENT_ARCHIVE_ITEMS = 240
 AGENT_SHORTLIST_LIMIT = 10
+AGENT_OSINT_DECISION_HOURS = 24
 SUPER_SIGNAL_MIN_SCORE = 0.75
 SUPER_SIGNAL_MIN_STRENGTH = 1.0
 SUPER_SIGNAL_MIN_CONFIDENCE = 0.75
 SUPER_SIGNAL_MIN_CONVICTION = 0.9
 ANALYSIS_CACHE_MAX_AGE_SECS = 900
 DEFAULT_AGENT_BACKEND = "gemma4_mlx"
-DEFAULT_GEMMA4_MLX_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
-DEFAULT_GEMMA4_EXPERIMENTAL_MODEL = "unsloth/gemma-4-E4B-it-UD-MLX-4bit"
+DEFAULT_GEMMA4_MLX_MODEL = RUNTIME_DEFAULT_GEMMA4_MODEL
+DEFAULT_GEMMA4_EXPERIMENTAL_MODEL = RUNTIME_EXPERIMENTAL_GEMMA4_MODEL
 DEFAULT_AGENT_MAX_TOKENS = 4000
 DEFAULT_AGENT_CHAT_MAX_TOKENS = 320
 DEFAULT_AGENT_TEMPERATURE = 0.15
@@ -68,6 +74,15 @@ NEGATIVE_OSINT_TERMS = {
     "arrest", "detain", "detained", "fraud", "probe", "investigation", "penalty",
     "default", "loss", "selloff", "decline", "downgrade", "suspension", "crackdown",
     "fine", "liquidity", "npl", "corruption", "panic", "halt",
+}
+POSITIVE_EVENT_TERMS = {
+    "release", "released", "resume", "approval", "approved", "reinstated",
+    "relief", "settlement", "alliance", "support", "easing", "stability",
+}
+NEGATIVE_EVENT_TERMS = {
+    "arrest", "detained", "detain", "crackdown", "investigation", "probe",
+    "violence", "unrest", "protest", "ban", "sanction", "corruption",
+    "fraud", "collapse", "pressure", "selloff",
 }
 
 _MLX_MODEL = None
@@ -130,30 +145,62 @@ RESPONSE STYLE: Direct, evidence-based, no hedging language. State your view and
 
 
 def _agent_backend() -> str:
-    return str(os.environ.get("NEPSE_AGENT_BACKEND", DEFAULT_AGENT_BACKEND) or DEFAULT_AGENT_BACKEND).strip().lower()
+    env_value = str(os.environ.get("NEPSE_AGENT_BACKEND", "") or "").strip().lower()
+    if env_value:
+        return env_value
+    cfg = load_active_agent_config()
+    return str(cfg.get("backend") or DEFAULT_AGENT_BACKEND).strip().lower()
 
 
 def _agent_model_id() -> str:
-    return str(os.environ.get("NEPSE_AGENT_MODEL", DEFAULT_GEMMA4_MLX_MODEL) or DEFAULT_GEMMA4_MLX_MODEL).strip()
+    env_value = str(os.environ.get("NEPSE_AGENT_MODEL", "") or "").strip()
+    if env_value:
+        return env_value
+    cfg = load_active_agent_config()
+    return str(cfg.get("model") or DEFAULT_GEMMA4_MLX_MODEL).strip()
 
 
 def _agent_provider_label() -> str:
-    backend = _agent_backend()
-    if backend == "claude":
-        return str(os.environ.get("NEPSE_AGENT_PROVIDER_LABEL", "claude") or "claude")
-    return str(os.environ.get("NEPSE_AGENT_PROVIDER_LABEL", "gemma4_mlx") or "gemma4_mlx")
+    env_value = str(os.environ.get("NEPSE_AGENT_PROVIDER_LABEL", "") or "").strip()
+    if env_value:
+        return env_value
+    cfg = load_active_agent_config()
+    return str(cfg.get("provider_label") or _agent_backend()).strip()
 
 
 def _agent_source_label() -> str:
-    backend = _agent_backend()
-    if backend == "claude":
-        return str(os.environ.get("NEPSE_AGENT_SOURCE_LABEL", "local_claude") or "local_claude")
-    return str(os.environ.get("NEPSE_AGENT_SOURCE_LABEL", "local_gemma4_mlx") or "local_gemma4_mlx")
+    env_value = str(os.environ.get("NEPSE_AGENT_SOURCE_LABEL", "") or "").strip()
+    if env_value:
+        return env_value
+    cfg = load_active_agent_config()
+    return str(cfg.get("source_label") or _agent_backend()).strip()
 
 
 def _agent_trust_remote_code() -> bool:
     raw = str(os.environ.get("NEPSE_AGENT_TRUST_REMOTE_CODE", "0") or "0").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        cfg = load_active_agent_config()
+        return bool(cfg.get("trust_remote_code"))
+    return False
+
+
+def _agent_fallback_backend() -> str:
+    env_value = str(os.environ.get("NEPSE_AGENT_FALLBACK_BACKEND", "") or "").strip().lower()
+    if env_value:
+        return env_value
+    cfg = load_active_agent_config()
+    return str(cfg.get("fallback_backend") or "claude").strip().lower()
+
+
+def reload_agent_runtime() -> dict:
+    global _MLX_MODEL, _MLX_PROCESSOR, _MLX_MODEL_ID
+    with _MLX_LOCK:
+        _MLX_MODEL = None
+        _MLX_PROCESSOR = None
+        _MLX_MODEL_ID = None
+    return load_active_agent_config()
 
 
 def _call_claude(prompt: str, system: str = SYSTEM_PROMPT, max_tokens: int = DEFAULT_AGENT_MAX_TOKENS) -> str:
@@ -250,7 +297,7 @@ def _call_primary_agent(prompt: str, system: str = SYSTEM_PROMPT, max_tokens: in
         response = _call_gemma4_mlx(prompt, system=system, max_tokens=max_tokens)
         if not str(response).startswith("ERROR:"):
             return response
-        fallback = str(os.environ.get("NEPSE_AGENT_FALLBACK_BACKEND", "claude") or "").strip().lower()
+        fallback = _agent_fallback_backend()
         if fallback == "claude":
             fallback_response = _call_claude(prompt, system=system, max_tokens=max_tokens)
             if not str(fallback_response).startswith("ERROR:"):
@@ -1662,9 +1709,161 @@ def _question_is_time_sensitive(question: str) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _question_is_directional_market_call(question: str) -> bool:
+    text = str(question or "").lower()
+    market_markers = (
+        "how would nepse react",
+        "how will nepse react",
+        "market react",
+        "upward pressure",
+        "downward pressure",
+        "market pressure",
+        "what happens to nepse",
+        "what would nepse do",
+        "after the news",
+        "political",
+    )
+    event_markers = POSITIVE_EVENT_TERMS | NEGATIVE_EVENT_TERMS | {"kp oli", "oli", "release"}
+    return any(marker in text for marker in market_markers) or any(token in text for token in event_markers)
+
+
+def _question_focus_query(question: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9\s]", " ", str(question or " "))
+    text = re.sub(
+        r"\b(how|would|will|could|should|what|happen|happens|after|the|news|of|to|nepse|market|react|reaction|be|on|if|do|does|did)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = " ".join(text.split())
+    return text[:96].strip() or str(question or "").strip()[:96]
+
+
+def _event_market_context(question: str) -> dict:
+    query = _question_focus_query(question)
+    unified = unified_search(query or question, limit=8, base_url=OSINT_BASE, timeout=8)
+    categories = dict(unified.get("categories") or {})
+    stories = list(dict(categories.get("stories") or {}).get("items") or [])
+    social = list(dict(categories.get("social_signals") or {}).get("items") or [])
+
+    lines: list[str] = []
+    for item in stories[:4]:
+        lines.append(
+            f"  [story] [{str(item.get('source_name') or ''):15s}] "
+            f"{str(item.get('published_at') or '')[:16]}  {_clip_text(item.get('title'), 140)}"
+        )
+    for item in social[:3]:
+        lines.append(
+            f"  [social] [@{str(item.get('author_username') or ''):15s}] "
+            f"{str(item.get('tweeted_at') or '')[:16]}  {_clip_text(item.get('text'), 140)}"
+        )
+
+    text_blob = " ".join(
+        [
+            str(question or ""),
+            *(str(item.get("title") or "") for item in stories),
+            *(str(item.get("summary") or "") for item in stories),
+            *(str(item.get("text") or "") for item in social),
+            *(str(item.get("match_reason") or "") for item in stories),
+        ]
+    )
+    bias = _osint_keyword_bias(text_blob)
+    lowered = text_blob.lower()
+    bias += min(0.05 * sum(1 for token in POSITIVE_EVENT_TERMS if token in lowered), 0.12)
+    bias -= min(0.06 * sum(1 for token in NEGATIVE_EVENT_TERMS if token in lowered), 0.16)
+    bias = max(-0.25, min(0.25, bias))
+    return {
+        "query": query or question,
+        "stories": stories,
+        "social": social,
+        "bias": bias,
+        "context_text": ("EVENT / POLITICAL OSINT CONTEXT:\n" + "\n".join(lines) + "\n") if lines else "",
+    }
+
+
+def _response_is_hedged_market_call(response: str) -> bool:
+    text = " ".join(str(response or "").lower().split())
+    if not text:
+        return True
+    if not text.startswith("base case:"):
+        return True
+    hedges = (
+        "depends entirely",
+        "could go either way",
+        "could be both",
+        "depends on the content",
+        "depends on how",
+        "both ways",
+        "however, if",
+        "if the release is perceived",
+    )
+    return any(token in text for token in hedges)
+
+
+def _build_directional_market_answer(question: str, analysis: dict, nepal_clock: dict, event_ctx: dict) -> str:
+    breadth_up = int((analysis.get("fresh_market") or {}).get("advancers") or analysis.get("advancers") or 0)
+    breadth_down = int((analysis.get("fresh_market") or {}).get("decliners") or analysis.get("decliners") or 0)
+    breadth_total = max(1, breadth_up + breadth_down)
+    breadth_edge = (breadth_up - breadth_down) / breadth_total
+    regime = str(analysis.get("regime") or "unknown").lower()
+    regime_bias = 0.08 if regime == "bull" else -0.08 if regime == "bear" else 0.0
+    event_bias = float(event_ctx.get("bias") or 0.0)
+    question_text = str(question or "").lower()
+    if any(token in question_text for token in POSITIVE_EVENT_TERMS):
+        event_bias += 0.06
+    if any(token in question_text for token in NEGATIVE_EVENT_TERMS):
+        event_bias -= 0.08
+    score = event_bias + (breadth_edge * 0.18) + regime_bias
+    phase = str(nepal_clock.get("market_phase") or "UNKNOWN")
+
+    if score >= 0.08:
+        base_case = "upward pressure"
+    elif score <= -0.08:
+        base_case = "downward pressure"
+    elif score > 0:
+        base_case = "flat-to-upward pressure"
+    else:
+        base_case = "flat-to-downward pressure"
+
+    horizon = "over the next 1-3 sessions"
+    if phase == "OPEN":
+        timing = "Because NEPSE is already live, I would expect the reaction to show up intraday first and then carry into the next 1-2 sessions if follow-through headlines confirm it."
+    elif phase in {"PREOPEN", "PREMARKET"}:
+        timing = "Because this is before the 11:00 NPT regular session, the reaction should hit the opening auction and first hour of cash trading."
+    else:
+        timing = "Because this is outside the regular 11:00-15:00 NPT session, the first clean read should come at the next open."
+
+    stories = list(event_ctx.get("stories") or [])
+    social = list(event_ctx.get("social") or [])
+    lead_ref = ""
+    if stories:
+        lead_ref = _clip_text(stories[0].get("title"), 96)
+    elif social:
+        lead_ref = _clip_text(social[0].get("text"), 96)
+
+    evidence_parts = [
+        f"breadth is currently ▲{breadth_up} vs ▼{breadth_down}",
+        f"the regime is {regime or 'unknown'}",
+    ]
+    if lead_ref:
+        evidence_parts.append(f"OSINT lead is \"{lead_ref}\"")
+    evidence = ", ".join(evidence_parts)
+
+    invalidation = (
+        "I would fade this call only if follow-up headlines shift into protests, arrests, or escalation."
+        if "upward" in base_case
+        else "I would only soften that view if follow-up headlines show de-escalation and breadth recovers fast after the open."
+    )
+    return (
+        f"Base case: {base_case} {horizon}. "
+        f"{timing} The reason is that {evidence}. {invalidation}"
+    )
+
+
 def ask(question: str) -> str:
     """Ask the agent a follow-up question with full context injection."""
     question = _clip_text(question, 900)
+    directional_market_call = _question_is_directional_market_call(question)
 
     # Load latest analysis
     ctx_text = ""
@@ -1713,6 +1912,8 @@ Stock verdicts:
 
     # Vector search for relevant OSINT context
     vector_ctx = _vector_search_for_question(question)
+    event_ctx = _event_market_context(question) if directional_market_call else {}
+    event_osint_ctx = str(event_ctx.get("context_text") or "")
 
     macro_ctx = _format_macro_context(_fetch_macro_market_context(), max_fx=4, max_commodities=3, max_energy=2)
 
@@ -1756,6 +1957,7 @@ Stock verdicts:
 {portfolio_ctx}
 {stock_ctx}
 {vector_ctx}
+{event_osint_ctx}
 {macro_ctx}
 {history_text}
 User question: {question}
@@ -1772,9 +1974,14 @@ IMPORTANT:
 - Do not confuse accounts. ACTIVE ACCOUNT and ACTIVE HOLDINGS above are the source of truth for whether a stock is already owned.
 - If a stock is already held in ACTIVE HOLDINGS, your stance can be BUY, HOLD, or SELL in plain language.
 - If a stock is not held, do not recommend HOLD; the stance should resolve to BUY or PASS/AVOID.
+- For political, policy, or NEPSE reaction questions, you must take a base-case directional stance: upward pressure, downward pressure, or flat-to-upward/downward bias.
+- Do not answer with "it could go either way", "depends entirely", or similar hedging for those event-driven market questions.
+- If OSINT evidence is thin, still give the most likely direction and say what would invalidate that call.
 - If evidence is missing, say it is missing rather than inventing facts."""
 
     response = _call_primary_agent(prompt, max_tokens=DEFAULT_AGENT_CHAT_MAX_TOKENS)
+    if directional_market_call and _response_is_hedged_market_call(response):
+        response = _build_directional_market_answer(question, analysis, nepal_clock, event_ctx)
 
     if str(os.environ.get("NEPSE_AGENT_DISABLE_HISTORY", "0") or "0").strip().lower() not in {"1", "true", "yes", "on"}:
         history = _load_combined_chat_history()

@@ -44,6 +44,10 @@ make mcp-stdio
 make gemma-agent
 make gemma-agent-ask Q="What is the market status right now? Use Nepal time."
 
+# Run whichever built-in agent is currently active
+make active-agent
+make active-agent-ask Q="What is the market status right now? Use Nepal time."
+
 # Daily ingestion + signal workflow
 ./scripts/ops/daily_run.sh
 ```
@@ -309,6 +313,10 @@ Key MCP tools:
 - `resume_trading`
 - `sync_watchlist`
 - `get_agent_tab_state`
+- `get_active_agent`
+- `list_agent_backends`
+- `set_active_agent`
+- `reload_agent_runtime`
 - `publish_agent_analysis`
 - `append_agent_chat_message`
 
@@ -326,6 +334,8 @@ Important runtime artifacts:
   - latest agent analysis shown in the TUI
 - [data/runtime/agents/agent_chat_history.json](/data/runtime/agents/agent_chat_history.json)
   - recent visible agent chat
+- [data/runtime/agents/active_agent.json](/data/runtime/agents/active_agent.json)
+  - shared built-in agent selection used by MCP, the TUI, and the generic active-agent runner
 - [data/runtime/trading/](/data/runtime/trading)
   - paper portfolio, paper orders, trade log, NAV log, and account runtime state
 
@@ -347,6 +357,68 @@ make gemma-agent
 ```
 
 The first Gemma 4 run downloads the model. Later runs use the local cache.
+
+## Switching Agents
+
+Built-in agent selection is now runtime-configured, not just environment-driven.
+
+Source of truth:
+
+- [data/runtime/agents/active_agent.json](/data/runtime/agents/active_agent.json)
+
+This file is read by:
+
+- the TUI when it runs local analysis or chat
+- the generic runner `scripts/agents/run_active_agent.py`
+- MCP tools that inspect or change the active built-in backend
+
+Supported built-in presets:
+
+- `gemma4_mlx`
+- `gemma4_experimental`
+- `claude`
+
+### Switch through MCP
+
+Use these MCP tools:
+
+- `get_active_agent`
+- `list_agent_backends`
+- `set_active_agent`
+- `reload_agent_runtime`
+
+Typical flow:
+
+1. Call `list_agent_backends`
+2. Call `set_active_agent(backend="claude")` or `set_active_agent(backend="gemma4_mlx")`
+3. Call `reload_agent_runtime`
+4. Run a fresh agent analysis or ask a new question in the TUI
+
+### Switch from the terminal
+
+Use the generic active-agent runner if you want to execute whichever backend is currently selected:
+
+```bash
+make active-agent
+make active-agent-ask Q="What is the market doing right now?"
+```
+
+Use the explicit Gemma runner if you want to force Gemma for one execution regardless of the runtime selection:
+
+```bash
+make gemma-agent
+make gemma-agent-ask Q="What is the market status right now? Use Nepal time."
+```
+
+### Precedence Rules
+
+Agent selection resolves in this order:
+
+1. Per-process environment overrides like `NEPSE_AGENT_BACKEND`
+2. Runtime config in `data/runtime/agents/active_agent.json`
+3. Built-in default `gemma4_mlx`
+
+That means MCP switching changes the shared default, while one-off scripts can still override it for a single process.
 
 ## Useful Commands
 
@@ -372,6 +444,12 @@ make gemma-agent
 # Ask Gemma a direct question
 make gemma-agent-ask Q="What is the market status right now? Use Nepal time."
 
+# Run the currently active built-in agent
+make active-agent
+
+# Ask the currently active built-in agent
+make active-agent-ask Q="How would NEPSE react after the latest political news?"
+
 # Run the core MCP / agent / TUI regression set
 pytest tests/unit/test_agent_bridge.py tests/unit/test_mcp_server.py tests/unit/test_dashboard_tui_intraday.py -q
 ```
@@ -385,7 +463,7 @@ Core execution:
 - `NEPSE_MCP_DRY_RUN`
 - `NEPSE_DB_FILE`
 
-Agent selection:
+Agent selection and switching:
 
 - `NEPSE_AGENT_BACKEND`
 - `NEPSE_AGENT_MODEL`
@@ -393,6 +471,8 @@ Agent selection:
 - `NEPSE_AGENT_PROVIDER_LABEL`
 - `NEPSE_AGENT_SOURCE_LABEL`
 - `NEPSE_AGENT_TRUST_REMOTE_CODE`
+
+These env vars override the shared runtime agent selection when they are set for a process.
 
 Live broker credentials:
 

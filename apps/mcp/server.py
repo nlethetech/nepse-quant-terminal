@@ -11,6 +11,12 @@ from backend.agents.agent_analyst import (
     load_agent_archive_history,
     load_agent_history,
     publish_external_agent_analysis,
+    reload_agent_runtime,
+)
+from backend.agents.runtime_config import (
+    list_agent_backends,
+    load_active_agent_config,
+    set_active_agent,
 )
 from backend.quant_pro.nepalosint_client import (
     related_stories as nepalosint_related_stories,
@@ -65,6 +71,23 @@ def build_tool_adapters(service: ControlPlaneCommandService) -> Dict[str, Callab
             "analysis": load_agent_analysis(),
             "history": load_agent_history(limit=20),
             "archive_count": len(load_agent_archive_history()),
+            "active_agent": load_active_agent_config(),
+        },
+        "get_active_agent": lambda: load_active_agent_config(),
+        "list_agent_backends": lambda: {
+            "active_agent": load_active_agent_config(),
+            "backends": list_agent_backends(),
+        },
+        "set_active_agent": lambda backend, model=None, provider_label=None, source_label=None, fallback_backend=None, trust_remote_code=None: set_active_agent(
+            backend,
+            model=model,
+            provider_label=provider_label,
+            source_label=source_label,
+            fallback_backend=fallback_backend,
+            trust_remote_code=trust_remote_code,
+        ),
+        "reload_agent_runtime": lambda: {
+            "active_agent": reload_agent_runtime(),
         },
         "publish_agent_analysis": lambda analysis, source="mcp_external", provider="external": publish_external_agent_analysis(
             analysis,
@@ -265,6 +288,36 @@ def build_server(
     @server.tool()
     def get_agent_tab_state():
         return adapters["get_agent_tab_state"]()
+
+    @server.tool()
+    def get_active_agent():
+        return adapters["get_active_agent"]()
+
+    @server.tool()
+    def list_agent_backends():
+        return adapters["list_agent_backends"]()
+
+    @server.tool()
+    def set_active_agent(
+        backend: str,
+        model: str | None = None,
+        provider_label: str | None = None,
+        source_label: str | None = None,
+        fallback_backend: str | None = None,
+        trust_remote_code: bool | None = None,
+    ):
+        return adapters["set_active_agent"](
+            backend=backend,
+            model=model,
+            provider_label=provider_label,
+            source_label=source_label,
+            fallback_backend=fallback_backend,
+            trust_remote_code=trust_remote_code,
+        )
+
+    @server.tool()
+    def reload_agent_runtime():
+        return adapters["reload_agent_runtime"]()
 
     @server.tool()
     def publish_agent_analysis(

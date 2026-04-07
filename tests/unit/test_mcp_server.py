@@ -83,3 +83,33 @@ def test_mcp_tool_adapters_expose_nepalosint_tools(monkeypatch):
     assert tools["semantic_story_search"](query="HRL")["results"][0]["story_id"] == "s1"
     assert tools["unified_osint_search"](query="HRL")["categories"]["stories"]["total"] == 1
     assert tools["related_story_search"](story_id="s1")["similar_stories"][0]["story_id"] == "s2"
+
+
+def test_mcp_tool_adapters_expose_agent_switch_tools(monkeypatch):
+    monkeypatch.setattr(
+        "apps.mcp.server.load_active_agent_config",
+        lambda: {"backend": "gemma4_mlx", "provider_label": "gemma4_mlx"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "apps.mcp.server.list_agent_backends",
+        lambda: [{"id": "gemma4_mlx"}, {"id": "claude"}],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "apps.mcp.server.set_active_agent",
+        lambda backend, **kwargs: {"backend": backend, **kwargs},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "apps.mcp.server.reload_agent_runtime",
+        lambda: {"backend": "claude"},
+        raising=False,
+    )
+
+    tools = build_tool_adapters(DummyService())
+
+    assert tools["get_active_agent"]()["backend"] == "gemma4_mlx"
+    assert len(tools["list_agent_backends"]()["backends"]) == 2
+    assert tools["set_active_agent"](backend="claude")["backend"] == "claude"
+    assert tools["reload_agent_runtime"]()["active_agent"]["backend"] == "claude"
