@@ -1,4 +1,9 @@
-"""Small NepalOSINT API client for semantic and unified search."""
+"""
+NepalOSINT API client for semantic and unified search.
+
+NOTE: The NepalOSINT API endpoints used here are not publicly accessible.
+Access is restricted — contact @nlethetech on X (Twitter) to request API access.
+"""
 
 from __future__ import annotations
 

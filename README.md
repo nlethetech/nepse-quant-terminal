@@ -400,6 +400,16 @@ Live broker credentials:
 - `NEPSE_TMS_USERNAME`
 - `NEPSE_TMS_PASSWORD`
 
+NepalOSINT (set base URL if you have access):
+
+- `NEPALOSINT_BASE_URL` — override the default API base (see [API Access](#nepalosint-api-access) below)
+
+## NepalOSINT API Access
+
+The NepalOSINT endpoints used in this project (`/embeddings/search`, `/search/unified`, `/stories/:id/related`) are **not publicly open**.
+
+To request access, contact **[@nlethetech on X](https://x.com/nlethetech)**.
+
 ## What Is Stable vs In Progress
 
 Relatively stable:
