@@ -8,6 +8,17 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from .event_layer import EventAdjustmentContext
 
 
+def is_tradeable_signal_symbol(symbol: object) -> bool:
+    clean = str(symbol or "").strip().upper()
+    if not clean:
+        return False
+    if clean == "NEPSE":
+        return False
+    if clean.startswith("SECTOR::"):
+        return False
+    return True
+
+
 def _base_signal_score(signal: Dict[str, Any]) -> float:
     return float(signal.get("strength", 0.0) or 0.0) * float(signal.get("confidence", 0.0) or 0.0)
 
@@ -46,7 +57,7 @@ def merge_signal_candidates(signals: Iterable[Dict[str, Any]]) -> List[Dict[str,
     grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for raw in signals:
         signal = _coerce_signal(raw)
-        if not signal["symbol"]:
+        if not is_tradeable_signal_symbol(signal["symbol"]):
             continue
         grouped[signal["symbol"]].append(signal)
 

@@ -11,6 +11,9 @@ The system is designed around one idea: the quantitative engine generates and ra
 - Supports broker-assisted live and shadow-live trading through TMS execution intents
 - Exposes the trading stack over MCP so external agents can inspect state and trigger approved actions
 - Uses a local Gemma 4 MLX agent as the default built-in analyst
+- Ships two public built-in strategies:
+  - `C5` — six-signal baseline, stock-only, fixed 35% sector cap
+  - `SAT06` — satellite variant for users who want a more thematic alternate profile
 - Enriches stock analysis with:
   - quarterly financial caches
   - NepalOSINT semantic story search
@@ -87,13 +90,14 @@ backend/
     alpha_practical.py            Daily scanner components
 
 configs/
-  long_term.py                    Main strategy profile used by the live/TUI stack
+  long_term.py                    Public default strategy profile (C5)
+  strategies/                     Public built-in strategy definitions (C5, SAT06)
   mcp/                            Ready-to-use MCP client configs
 
 scripts/
   ingestion/                      Deterministic market data ingestion
   signals/                        Daily signal generator
-  agents/                         Local Codex / Gemma agent launchers
+  agents/                         Local agent launchers
   mcp/                            MCP launch wrappers
   ops/                            Daily workflow scripts
   validation/                     Backtest / leakage / robustness scripts
@@ -123,29 +127,38 @@ Main sources used by the runtime:
 - Kalimati commodities via [kalimati_market.py](/backend/market/kalimati_market.py)
 - NepalOSINT news/social search via [nepalosint_client.py](/backend/quant_pro/nepalosint_client.py)
 
-### 2. Signal Generation
+### 2. Strategies And Signal Generation
 
-The live/TUI trading stack uses [generate_signals() in live_trader.py](/backend/trading/live_trader.py) with the active profile from [long_term.py](/configs/long_term.py).
+The live/TUI trading stack uses [generate_signals() in live_trader.py](/backend/trading/live_trader.py) with the active strategy bound to the current paper account.
 
-Current default signal families:
+Public built-in strategies:
 
-- `volume`
-- `quality`
-- `low_vol`
-- `mean_reversion`
-- `disposition` (CGO breakout / disposition effect)
-- `lead_lag` (sector spillover)
-- `52wk_high`
+- `C5`
+  - `volume`
+  - `quality`
+  - `low_vol`
+  - `mean_reversion`
+  - `quarterly_fundamental`
+  - `xsec_momentum`
+- `SAT06`
+  - `quality`
+  - `quarterly_fundamental`
+  - `xsec_momentum`
+  - `satellite_hydro`
+
+Important guardrail:
+
+- the shared ranker filters out `NEPSE` and `SECTOR::...` proxy symbols before ranking or execution
+
+The default startup profile is `C5`.
 
 Signal generation flow:
 
 1. Load historical prices from SQLite.
 2. Compute market regime.
-3. If the regime filter is enabled and regime is `bear`, skip or downgrade entries.
-4. Run each enabled signal family and collect raw candidates.
-5. Apply Amihud illiquidity tilt to penalize names that look good but are too hard to trade.
-6. Apply regime and NRB policy confidence multipliers.
-7. Sort by `strength * confidence`.
+3. Run only the explicitly enabled signal families for the active strategy.
+4. Filter out non-tradeable benchmark and sector proxy symbols.
+5. Merge and rank candidates through the shared ranker.
 
 ### 3. How Stocks Are Initially Filtered
 
@@ -200,13 +213,15 @@ The agent is not the alpha generator. It is the research/risk overlay on top of 
 
 The built-in analyst lives in [agent_analyst.py](/backend/agents/agent_analyst.py) and currently:
 
-- takes the top 10 ranked symbols
+- takes the top 10 ranked symbols from the active account strategy
 - force-refreshes the latest market snapshot
 - loads quarterly metrics
 - runs NepalOSINT semantic + unified + related-story search for each name
 - injects NRB forex and Kalimati commodity context
 - evaluates each stock into `APPROVE`, `HOLD`, or `REJECT`
 - writes the analysis into the shared runtime file used by the TUI and MCP
+
+The Signals tab and Top 10 Agent Picks now follow the same active account strategy, so switching accounts changes both the shortlist and the agent review context.
 
 The default primary agent is local Gemma 4 on MLX:
 
