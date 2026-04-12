@@ -77,6 +77,7 @@ from backend.quant_pro.paths import (
     migrate_legacy_path,
 )
 from backend.agents.agent_analyst import (
+    ACTIVE_SIGNALS_SNAPSHOT_FILE,
     analyze as agent_analyze,
     append_external_agent_chat_message,
     build_algo_shortlist_snapshot,
@@ -88,6 +89,7 @@ from backend.agents.agent_analyst import (
 from backend.quant_pro.control_plane.command_service import build_tui_control_plane
 from backend.quant_pro.stock_report import build_stock_report
 from backend.quant_pro.tms_audit import load_latest_tms_snapshot, save_tms_snapshot
+from backend.trading import strategy_registry
 from backend.trading.tui_trading_engine import TUITradingEngine
 from backend.market.kalimati_market import init_kalimati_db, refresh_kalimati, get_kalimati_display_rows
 from backend.trading.live_trader import (
@@ -415,7 +417,7 @@ def _save_profile_config(payload: dict) -> None:
 def _bootstrap_paper_accounts() -> tuple[list[dict], str]:
     ensure_dir(PAPER_ACCOUNTS_DIR)
     registry = _load_accounts_registry()
-    accounts = list(registry.get("accounts") or [])
+    accounts = strategy_registry.ensure_account_strategy_ids(list(registry.get("accounts") or []))
     profile = _load_profile_config()
     current_account_id = str(profile.get("current_account_id") or "").strip()
     if not accounts:
@@ -423,6 +425,7 @@ def _bootstrap_paper_accounts() -> tuple[list[dict], str]:
         account = {
             "id": current_account_id,
             "name": "Account 1",
+            "strategy_id": strategy_registry.default_strategy_for_account(current_account_id),
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
@@ -436,7 +439,7 @@ def _bootstrap_paper_accounts() -> tuple[list[dict], str]:
         for name, active_path in ACTIVE_ACCOUNT_FILES.items():
             _copy_file_if_exists(Path(active_path), target_dir / name)
     _blank_account_files(target_dir)
-    registry["accounts"] = accounts
+    registry["accounts"] = strategy_registry.ensure_account_strategy_ids(accounts)
     _save_accounts_registry(registry)
     profile["current_account_id"] = current_account_id
     _save_profile_config(profile)
@@ -3089,6 +3092,9 @@ class NepseDashboard(App):
     _paper_accounts: list[dict] = []
     _current_account_id: str = "account_1"
     _selected_account_id: str = "account_1"
+    _selected_strategy_id: str = "c5"
+    _strategies: list[dict] = []
+    _strategy_backtest_result: dict = {}
     _account_help_visible: bool = False
     _agent_chat_process: Optional[subprocess.Popen] = None
     _agent_chat_request_id: int = 0
@@ -3302,6 +3308,21 @@ class NepseDashboard(App):
                             "Selecting and activating an account swaps the full paper runtime.",
                             id="profile-note",
                         )
+                        yield Static("STRATEGIES", classes="panel-title")
+                        yield DataTable(id="dt-strategy-list", zebra_stripes=True, cursor_type="row")
+                        yield Static("", id="strategy-summary")
+                        with Horizontal(id="strategy-actions"):
+                            yield Button("APPLY ACTIVE", id="strategy-btn-assign-active", classes="profile-btn profile-action-button")
+                            yield Button("APPLY SELECTED", id="strategy-btn-assign-selected", classes="profile-btn profile-action-button")
+                            yield Button("RUN BACKTEST", id="strategy-btn-run-backtest", classes="profile-btn profile-action-button")
+                        with Horizontal(id="strategy-backtest-row"):
+                            yield Static("START", classes="profile-inline-label")
+                            yield Input(id="strategy-inp-backtest-start", placeholder="2025-01-01", classes="profile-inline-input")
+                            yield Static("END", classes="profile-inline-label")
+                            yield Input(id="strategy-inp-backtest-end", placeholder="2026-04-11", classes="profile-inline-input")
+                            yield Static("CAP", classes="profile-inline-label")
+                            yield Input(id="strategy-inp-backtest-capital", placeholder="1000000", classes="profile-inline-input profile-nav-input")
+                        yield Static("", id="strategy-backtest-summary")
 
         yield Static(id="status-bar")
 
@@ -3333,6 +3354,8 @@ class NepseDashboard(App):
         _ensure_paper_runtime_files()
         self._paper_accounts, self._current_account_id = _bootstrap_paper_accounts()
         self._selected_account_id = self._current_account_id
+        self._load_strategies_registry()
+        self._apply_active_strategy_runtime()
         self._sync_agent_account_context_env()
         # Pull live quotes into DB before loading market data
         try:
@@ -3368,6 +3391,7 @@ class NepseDashboard(App):
         self._populate_market()
         self._populate_portfolio_and_risk()
         self._populate_trades_full()
+        self._populate_strategy_panel()
         self._osint_stories: list[dict] = []
         self._agent_analysis: dict = {}
         self._agent_history: list[dict] = []
@@ -3863,6 +3887,13 @@ class NepseDashboard(App):
     def action_refresh(self) -> None:
         if self.active_tab == "watchlist" and self.trade_mode == "live" and self.tms_service:
             self._refresh_watchlist_live(force=True)
+        if self.active_tab == "signals":
+            self._signals_table_cache_key = ""
+            self._signals_table_cache_payload = None
+            self._populate_signals_workspace(force=True)
+            self._load_signals_async(force=True)
+            self._set_status(f"Reloading {self._active_strategy_name()} signals...")
+            return
         self._do_refresh()
 
     def _on_buy(self, result: dict | None) -> None:
@@ -4518,7 +4549,10 @@ class NepseDashboard(App):
 
     def _load_agent_runtime_state(self) -> None:
         self._agent_analysis = load_agent_analysis() or {}
-        if str((self._agent_analysis or {}).get("account_id") or "") != str(getattr(self, "_current_account_id", "account_1") or "account_1"):
+        if (
+            str((self._agent_analysis or {}).get("account_id") or "") != str(getattr(self, "_current_account_id", "account_1") or "account_1")
+            or str((self._agent_analysis or {}).get("strategy_id") or "") != self._active_strategy_id()
+        ):
             self._agent_analysis = {}
         all_recent = list(load_agent_history() or [])
         visible_cutoff = float(getattr(self, "_agent_visible_since", 0.0) or 0.0)
@@ -4545,6 +4579,8 @@ class NepseDashboard(App):
         os.environ["NEPSE_ACTIVE_ACCOUNT_NAME"] = self._active_account_name()
         os.environ["NEPSE_ACTIVE_ACCOUNT_DIR"] = str(account_dir)
         os.environ["NEPSE_ACTIVE_PORTFOLIO_FILE"] = str(account_dir / "paper_portfolio.csv")
+        os.environ["NEPSE_ACTIVE_STRATEGY_ID"] = self._active_strategy_id()
+        os.environ["NEPSE_ACTIVE_STRATEGY_NAME"] = self._active_strategy_name()
 
     def _current_agent_provider_label(self) -> str:
         meta = dict((getattr(self, "_agent_analysis", {}) or {}).get("agent_runtime_meta") or {})
@@ -4679,6 +4715,7 @@ class NepseDashboard(App):
             return
         if tab == "signals":
             self._populate_signals_workspace()
+            self._load_signals_async()
             return
         if tab == "lookup":
             if not str(self.lookup_sym or "").strip():
@@ -4752,7 +4789,7 @@ class NepseDashboard(App):
 
     @work(thread=True)
     def _load_signals_async(self, force: bool = False) -> None:
-        cache_key = self._data_version()
+        cache_key = self._signals_cache_key()
         if (
             not force
             and cache_key == self._signals_table_cache_key
@@ -4763,45 +4800,39 @@ class NepseDashboard(App):
             return
         self.call_from_thread(self._set_status, "Loading signals...")
         try:
-            from backend.backtesting.simple_backtest import (
-                load_all_prices,
-                generate_volume_breakout_signals_at_date,
-                generate_quality_signals_at_date,
-                generate_low_volatility_signals_at_date,
-                generate_mean_reversion_signals_at_date,
-                generate_xsec_momentum_signals_at_date,
-                generate_accumulation_signals_at_date,
-            )
+            from backend.backtesting.simple_backtest import load_all_prices
+            from backend.trading.live_trader import generate_signals
             conn = _db()
             prices_df = load_all_prices(conn)
             conn.close()
-            today = datetime.strptime(self.md.latest, "%Y-%m-%d")
-            sigs = []
-            sigs.extend(generate_volume_breakout_signals_at_date(prices_df, today))
-            sigs.extend(generate_quality_signals_at_date(prices_df, today))
-            sigs.extend(generate_low_volatility_signals_at_date(prices_df, today))
-            sigs.extend(generate_mean_reversion_signals_at_date(prices_df, today))
-            sigs.extend(generate_xsec_momentum_signals_at_date(prices_df, today))
-            sigs.extend(generate_accumulation_signals_at_date(prices_df, today))
-            sigs = sorted(sigs, key=lambda x: x.score, reverse=True)[:40]
+            strategy = self._active_strategy_payload() or {}
+            strategy_name = str(strategy.get("name") or self._active_strategy_name())
+            strategy_config = dict(strategy.get("config") or self._active_strategy_config())
+            sigs, regime = generate_signals(
+                prices_df,
+                list(strategy_config.get("signal_types") or []),
+                use_regime_filter=bool(strategy_config.get("use_regime_filter", True)),
+            )
+            sigs = list(sigs or [])[:40]
 
             cols = [("  #", "n"), ("SYMBOL", "sym"), ("SCORE", "score"),
                     ("TYPE", "type"), ("STR", "str"), ("CONF", "conf"), ("DIR", "dir")]
             rows = []
             for i, s in enumerate(sigs, 1):
-                score_style = GAIN_HI if s.score > 0 else LOSS if s.score < 0 else LABEL
+                score = float(s.get("score") or 0.0)
+                score_style = GAIN_HI if score > 0 else LOSS if score < 0 else LABEL
                 rows.append([
-                    _dim_text(str(i)), _sym_text(s.symbol),
-                    Text(f"{s.score:.3f}", style=score_style),
-                    Text(s.signal_type.value, style=CYAN),
-                    Text(f"{s.strength:.2f}", style=WHITE),
-                    Text(f"{s.confidence:.2f}", style=WHITE),
-                    Text("▲ LONG", style=f"bold {GAIN_HI}") if s.direction > 0
-                    else _dim_text("—"),
+                    _dim_text(str(i)), _sym_text(str(s.get("symbol") or "")),
+                    Text(f"{score:.3f}", style=score_style),
+                    Text(str(s.get("signal_type") or "")[:14], style=CYAN),
+                    Text(f"{float(s.get('strength') or 0.0):.2f}", style=WHITE),
+                    Text(f"{float(s.get('confidence') or 0.0):.2f}", style=WHITE),
+                    Text("▲ LONG", style=f"bold {GAIN_HI}"),
                 ])
+            self._publish_active_signals_snapshot(strategy_name, regime, sigs)
             self.call_from_thread(self._render_signals_table_payload, cache_key, cols, rows, len(sigs))
             self.call_from_thread(self._set_status,
-                f"Signals loaded: {len(sigs)} │ Session: {self.md.latest}")
+                f"Signals loaded: {len(sigs)} │ {strategy_name} │ Session: {self.md.latest}")
         except Exception as e:
             self.call_from_thread(self._set_status, f"Signal error: {e}")
 
@@ -4823,6 +4854,23 @@ class NepseDashboard(App):
             dt.add_column(label, key=key)
         for row in rows:
             dt.add_row(*row)
+
+    def _publish_active_signals_snapshot(self, strategy_name: str, regime: str, signals: list[dict]) -> None:
+        payload = {
+            "timestamp": time.time(),
+            "context_date": str(getattr(self.md, "latest", "")),
+            "account_id": str(getattr(self, "_current_account_id", "account_1") or "account_1"),
+            "account_name": self._active_account_name(),
+            "strategy_id": self._active_strategy_id(),
+            "strategy_name": str(strategy_name or self._active_strategy_name()),
+            "regime": str(regime or ""),
+            "signals": list(signals or []),
+        }
+        try:
+            ensure_dir(ACTIVE_SIGNALS_SNAPSHOT_FILE.parent)
+            ACTIVE_SIGNALS_SNAPSHOT_FILE.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     # ── Rates & Commodities ──────────────────────────────────────────────────
 
@@ -5718,6 +5766,10 @@ class NepseDashboard(App):
             if 0 <= idx < len(accounts):
                 selected = accounts[idx]
                 self._selected_account_id = str(selected.get("id") or self._current_account_id)
+                self._selected_strategy_id = str(
+                    selected.get("strategy_id")
+                    or strategy_registry.default_strategy_for_account(self._selected_account_id)
+                )
                 try:
                     self.query_one("#profile-inp-account-name", Input).value = str(selected.get("name") or "")
                 except Exception:
@@ -5728,8 +5780,17 @@ class NepseDashboard(App):
                 except Exception:
                     pass
                 self._populate_account_list()
+                self._populate_strategy_panel()
                 selected_name = str(selected.get("name") or self._selected_account_id)
                 self._set_status(f"Selected {selected_name} | press ACTIVATE to switch")
+            return
+        if event.data_table.id == "dt-strategy-list":
+            idx = event.cursor_row
+            strategies = list(getattr(self, "_strategies", []) or [])
+            if 0 <= idx < len(strategies):
+                self._selected_strategy_id = str(strategies[idx].get("id") or self._selected_strategy_id)
+                self._populate_strategy_panel()
+                self._set_status(f"Selected {strategy_registry.strategy_name(self._selected_strategy_id)}")
             return
         # dt-news replaced by OptionList — handled in on_option_list_option_highlighted
 
@@ -5980,6 +6041,21 @@ class NepseDashboard(App):
                 self._set_status(self._save_current_account_snapshot())
             except Exception as exc:
                 self._set_status(f"Snapshot save failed: {exc}")
+        elif bid == "strategy-btn-assign-active":
+            try:
+                self._set_status(self._assign_strategy_to_account(self._selected_strategy_id, self._current_account_id))
+            except Exception as exc:
+                self._set_status(f"Strategy assign failed: {exc}")
+        elif bid == "strategy-btn-assign-selected":
+            try:
+                self._set_status(self._assign_strategy_to_account(self._selected_strategy_id, self._selected_account_id))
+            except Exception as exc:
+                self._set_status(f"Strategy assign failed: {exc}")
+        elif bid == "strategy-btn-run-backtest":
+            try:
+                self._set_status(self._start_strategy_backtest())
+            except Exception as exc:
+                self._set_status(f"Strategy backtest failed: {exc}")
         elif bid == "order-btn-cancel":
             # Cancel selected order from daily order book
             try:
@@ -6406,6 +6482,64 @@ class NepseDashboard(App):
         except Exception:
             pass
 
+    def _strategy_account_binding(self, account_id: str) -> Optional[dict]:
+        aid = str(account_id or "").strip()
+        for account in list(getattr(self, "_paper_accounts", []) or []):
+            if str(account.get("id") or "") == aid:
+                return account
+        return None
+
+    def _load_strategies_registry(self) -> None:
+        self._strategies = strategy_registry.list_strategies()
+        preferred = str(
+            (self._strategy_account_binding(getattr(self, "_current_account_id", "account_1")) or {}).get("strategy_id")
+            or strategy_registry.default_strategy_for_account(getattr(self, "_current_account_id", "account_1"))
+        )
+        known = {str(item.get("id") or "") for item in self._strategies}
+        self._selected_strategy_id = preferred if preferred in known else (next(iter(known)) if known else "c5")
+
+    def _selected_strategy_payload(self) -> Optional[dict]:
+        sid = str(getattr(self, "_selected_strategy_id", "") or "").strip().lower()
+        for item in list(getattr(self, "_strategies", []) or []):
+            if str(item.get("id") or "").strip().lower() == sid:
+                return item
+        return strategy_registry.load_strategy(sid)
+
+    def _active_strategy_payload(self) -> Optional[dict]:
+        account_id = str(getattr(self, "_current_account_id", "account_1") or "account_1")
+        account = self._strategy_account_binding(account_id)
+        strategy_id = str((account or {}).get("strategy_id") or strategy_registry.default_strategy_for_account(account_id))
+        return strategy_registry.load_strategy(strategy_id)
+
+    def _active_strategy_id(self) -> str:
+        payload = self._active_strategy_payload() or {}
+        return str(payload.get("id") or "c5")
+
+    def _active_strategy_name(self) -> str:
+        payload = self._active_strategy_payload() or {}
+        return str(payload.get("name") or strategy_registry.strategy_name(self._active_strategy_id()) or "C5")
+
+    def _active_strategy_config(self) -> dict:
+        payload = self._active_strategy_payload() or {}
+        config = dict(payload.get("config") or {})
+        if not config:
+            config = dict(LONG_TERM_CONFIG)
+        return config
+
+    def _apply_active_strategy_runtime(self) -> None:
+        config = self._active_strategy_config()
+        self.signal_types = list(config.get("signal_types") or list(LONG_TERM_CONFIG.get("signal_types") or []))
+        self.max_positions = int(config.get("max_positions") or LONG_TERM_CONFIG.get("max_positions") or 0)
+        self.holding_days = int(config.get("holding_days") or LONG_TERM_CONFIG.get("holding_days") or 0)
+        self.sector_limit = float(config.get("sector_limit") or LONG_TERM_CONFIG.get("sector_limit") or 0.0)
+        self.use_regime_filter = bool(config.get("use_regime_filter", True))
+
+    def _strategy_metrics(self, strategy_id: str) -> Optional[dict]:
+        return strategy_registry.latest_backtest_summary(strategy_id)
+
+    def _signals_cache_key(self) -> str:
+        return f"{self._data_version()}:{getattr(self, '_current_account_id', 'account_1')}:{self._active_strategy_id()}"
+
     def _profile_runtime_snapshot(self, *, account_dir: Optional[Path] = None) -> dict:
         if account_dir:
             portfolio_path = account_dir / "paper_portfolio.csv"
@@ -6464,6 +6598,7 @@ class NepseDashboard(App):
         mode_note = "Creating or activating an account swaps the full paper runtime" if self.trade_mode == "paper" else "Paper account controls are idle while live mode is selected"
         summary = Text.from_markup(
             f"[bold {WHITE}]Active[/] {current_name}   "
+            f"[bold {WHITE}]Strategy[/] {self._active_strategy_name()}   "
             f"[bold {WHITE}]Selected[/] {selected_name}   "
             f"[bold {WHITE}]Holdings[/] {snapshot['holdings']}   "
             f"[bold {WHITE}]Trades[/] {snapshot['trades']}   "
@@ -6518,6 +6653,7 @@ class NepseDashboard(App):
         except Exception:
             pass
         self._populate_account_list()
+        self._populate_strategy_panel()
 
     def _account_create_from_form(self) -> str:
         raw_name = self.query_one("#profile-inp-account-name", Input).value
@@ -6578,7 +6714,7 @@ class NepseDashboard(App):
         except Exception:
             return
         dt.clear(columns=True)
-        for label, key in [("ID", "id"), ("NAME", "name"), ("HOLD", "hold"), ("NAV", "nav"), ("CASH", "cash"), ("STATUS", "status")]:
+        for label, key in [("ID", "id"), ("NAME", "name"), ("STRAT", "strategy"), ("HOLD", "hold"), ("NAV", "nav"), ("CASH", "cash"), ("STATUS", "status")]:
             dt.add_column(label, key=key)
         rows = []
         selected_index = 0
@@ -6592,18 +6728,181 @@ class NepseDashboard(App):
             dt.add_row(
                 Text(account_id.replace("account_", "A"), style=DIM),
                 Text(snap["name"], style=WHITE),
+                Text(strategy_registry.strategy_name(str(account.get("strategy_id") or "")), style=CYAN),
                 Text(str(snap["holdings"]), style=WHITE),
                 Text(_npr_k(snap["nav"]), style=AMBER),
                 Text(_npr_k(snap["cash"]), style=WHITE),
                 Text(status, style=f"bold {GAIN_HI}" if status == "ACTIVE" else CYAN if status == "SELECTED" else DIM),
             )
         if not rows:
-            dt.add_row(_dim_text("—"), _dim_text("No accounts"), Text(""), Text(""), Text(""), Text(""))
+            dt.add_row(_dim_text("—"), _dim_text("No accounts"), Text(""), Text(""), Text(""), Text(""), Text(""))
         else:
             try:
                 dt.move_cursor(row=selected_index)
             except Exception:
                 pass
+
+    def _populate_strategy_list(self) -> None:
+        try:
+            dt = self.query_one("#dt-strategy-list", DataTable)
+        except Exception:
+            return
+        dt.clear(columns=True)
+        for label, key, width in [
+            ("NAME", "name", 7),
+            ("SIG", "sig", 4),
+            ("HOLD", "hold", 5),
+            ("RET", "ret", 9),
+            ("VS NP", "vsnp", 10),
+            ("SHRP", "sharpe", 6),
+            ("DD", "dd", 8),
+            ("TRD", "trd", 4),
+        ]:
+            dt.add_column(label, key=key, width=width)
+        selected_index = 0
+        for idx, strategy in enumerate(list(getattr(self, "_strategies", []) or [])):
+            sid = str(strategy.get("id") or "")
+            metrics = self._strategy_metrics(sid) or {}
+            nepse = dict(metrics.get("nepse") or {})
+            total_return = float(metrics.get("total_return_pct") or 0.0)
+            alpha = total_return - float(nepse.get("return_pct") or 0.0)
+            if sid == str(getattr(self, "_selected_strategy_id", "") or ""):
+                selected_index = idx
+            dt.add_row(
+                Text(str(strategy.get("name") or sid), style=WHITE),
+                Text(str(len(list((strategy.get("config") or {}).get("signal_types") or []))), style=WHITE),
+                Text(str((strategy.get("config") or {}).get("holding_days") or ""), style=WHITE),
+                Text(f"{total_return:+.2f}%" if metrics else "—", style=GAIN_HI if total_return >= 0 else LOSS_HI),
+                Text(f"{alpha:+.2f}pp" if metrics else "—", style=GAIN_HI if alpha >= 0 else LOSS_HI),
+                Text(f"{float(metrics.get('sharpe_ratio') or 0.0):.2f}" if metrics else "—", style=WHITE),
+                Text(f"{float(metrics.get('max_drawdown_pct') or 0.0):+.2f}%" if metrics else "—", style=WHITE),
+                Text(str(int(metrics.get("trade_count") or 0)) if metrics else "—", style=WHITE),
+            )
+        if not self._strategies:
+            dt.add_row(_dim_text("No strategies"), Text(""), Text(""), Text(""), Text(""), Text(""), Text(""), Text(""))
+            return
+        try:
+            dt.move_cursor(row=selected_index)
+        except Exception:
+            pass
+
+    def _populate_strategy_panel(self) -> None:
+        self._populate_strategy_list()
+        selected = self._selected_strategy_payload()
+        if not selected:
+            return
+        config = dict(selected.get("config") or {})
+        metrics = self._strategy_metrics(str(selected.get("id") or "")) or {}
+        nepse = dict(metrics.get("nepse") or {})
+        alpha = float(metrics.get("total_return_pct") or 0.0) - float(nepse.get("return_pct") or 0.0)
+        try:
+            if metrics:
+                summary_markup = (
+                    f"[bold {WHITE}]Selected[/] {selected.get('name')}   "
+                    f"[bold {WHITE}]Signals[/] {', '.join(list(config.get('signal_types') or []))}\n"
+                    f"[bold {WHITE}]Hold[/] {config.get('holding_days')}d   "
+                    f"[bold {WHITE}]Max pos[/] {config.get('max_positions')}   "
+                    f"[bold {WHITE}]Stop[/] {float(config.get('stop_loss_pct') or 0.0):.2f}   "
+                    f"[bold {WHITE}]Trail[/] {float(config.get('trailing_stop_pct') or 0.0):.2f}\n"
+                    f"[bold {WHITE}]Latest[/] {float(metrics.get('total_return_pct') or 0.0):+.2f}%   "
+                    f"[bold {WHITE}]vs NEPSE[/] {alpha:+.2f}pp   "
+                    f"[bold {WHITE}]Sharpe[/] {float(metrics.get('sharpe_ratio') or 0.0):.2f}   "
+                    f"[bold {WHITE}]DD[/] {float(metrics.get('max_drawdown_pct') or 0.0):+.2f}%"
+                )
+            else:
+                summary_markup = (
+                    f"[bold {WHITE}]Selected[/] {selected.get('name')}\n"
+                    f"[#8aa0b5]Signals[/] {', '.join(list(config.get('signal_types') or []))}\n"
+                    f"[#8aa0b5]Run a backtest to store comparable metrics.[/]"
+                )
+            self.query_one("#strategy-summary", Static).update(
+                Text.from_markup(summary_markup)
+            )
+        except Exception:
+            pass
+        try:
+            start_widget = self.query_one("#strategy-inp-backtest-start", Input)
+            if not start_widget.value:
+                start_widget.value = "2025-01-01"
+            end_widget = self.query_one("#strategy-inp-backtest-end", Input)
+            if not end_widget.value:
+                end_widget.value = str(getattr(self.md, "latest", datetime.now().strftime("%Y-%m-%d")) or datetime.now().strftime("%Y-%m-%d"))
+            cap_widget = self.query_one("#strategy-inp-backtest-capital", Input)
+            if not cap_widget.value:
+                cap_widget.value = "1000000"
+        except Exception:
+            pass
+        try:
+            backtest_widget = self.query_one("#strategy-backtest-summary", Static)
+            result = dict(getattr(self, "_strategy_backtest_result", {}) or {})
+            if result and str((result.get("strategy") or {}).get("id") or "") == str(selected.get("id") or ""):
+                summary = dict(result.get("summary") or {})
+                nepse_bt = dict(result.get("nepse") or {})
+                backtest_widget.update(
+                    Text.from_markup(
+                        f"[bold {WHITE}]Backtest[/] {result.get('window', {}).get('start')} → {result.get('window', {}).get('end')}   "
+                        f"[bold {WHITE}]Strategy[/] {float(summary.get('total_return_pct') or 0.0):+.2f}%   "
+                        f"[bold {WHITE}]NEPSE[/] {float(nepse_bt.get('return_pct') or 0.0):+.2f}%   "
+                        f"[bold {WHITE}]Alpha[/] {float(summary.get('vs_nepse_pct_points') or 0.0):+.2f}pp"
+                    )
+                )
+            else:
+                backtest_widget.update(Text.from_markup("[#8aa0b5]Backtest results are saved under data/runtime/strategy_registry/backtests/[/]"))
+        except Exception:
+            pass
+
+    def _assign_strategy_to_account(self, strategy_id: str, account_id: str) -> str:
+        sid = str(strategy_id or "").strip().lower()
+        aid = str(account_id or "").strip()
+        if not sid:
+            raise ValueError("Select a strategy first")
+        registry = _load_accounts_registry()
+        accounts = list(registry.get("accounts") or [])
+        updated = False
+        now_stamp = datetime.now().isoformat(timespec="seconds")
+        for account in accounts:
+            if str(account.get("id") or "") == aid:
+                account["strategy_id"] = sid
+                account["updated_at"] = now_stamp
+                updated = True
+                break
+        if not updated:
+            raise ValueError("Account not found")
+        registry["accounts"] = strategy_registry.ensure_account_strategy_ids(accounts)
+        _save_accounts_registry(registry)
+        self._paper_accounts = list(registry["accounts"])
+        self._selected_strategy_id = sid
+        if aid == str(getattr(self, "_current_account_id", "") or ""):
+            self._apply_active_strategy_runtime()
+            self._sync_agent_account_context_env()
+            self._signals_table_cache_key = ""
+            self._signals_table_cache_payload = None
+            self._agent_analysis = {}
+        self._populate_paper_profile_panel(self._stats)
+        return f"Assigned {strategy_registry.strategy_name(sid)} to {aid}"
+
+    @work(thread=True)
+    def _run_strategy_backtest_async(self, strategy_id: str, start_date: str, end_date: str, capital: float) -> None:
+        try:
+            payload = strategy_registry.load_strategy(strategy_id)
+            if not payload:
+                raise ValueError("Strategy not found")
+            result = strategy_registry.run_strategy_backtest(payload, start_date=start_date, end_date=end_date, capital=capital)
+            self._strategy_backtest_result = result
+            self.call_from_thread(self._populate_strategy_panel)
+            self.call_from_thread(self._set_status, f"Backtest complete: {payload.get('name')} {result.get('summary', {}).get('total_return_pct', 0.0):+.2f}%")
+        except Exception as exc:
+            self.call_from_thread(self._set_status, f"Strategy backtest failed: {exc}")
+
+    def _start_strategy_backtest(self) -> str:
+        selected = self._selected_strategy_payload()
+        if not selected:
+            raise ValueError("Select a strategy first")
+        start = str(self.query_one("#strategy-inp-backtest-start", Input).value or "").strip()
+        end = str(self.query_one("#strategy-inp-backtest-end", Input).value or "").strip()
+        capital = float(str(self.query_one("#strategy-inp-backtest-capital", Input).value or "1000000").replace(",", ""))
+        self._run_strategy_backtest_async(str(selected.get("id") or ""), start, end, capital)
+        return f"Running backtest for {selected.get('name')}..."
 
     def _persist_active_account_snapshot(self) -> None:
         account_id = str(getattr(self, "_current_account_id", "") or "").strip()
@@ -6640,6 +6939,11 @@ class NepseDashboard(App):
                 shutil.copy2(source, target)
         self._current_account_id = target_id
         self._selected_account_id = target_id
+        self._selected_strategy_id = str(
+            (self._strategy_account_binding(target_id) or {}).get("strategy_id")
+            or strategy_registry.default_strategy_for_account(target_id)
+        )
+        self._apply_active_strategy_runtime()
         self._sync_agent_account_context_env()
         profile = _load_profile_config()
         profile["current_account_id"] = target_id
@@ -6652,6 +6956,9 @@ class NepseDashboard(App):
         self._populate_orders_tab()
         self._populate_watchlist()
         self._populate_paper_profile_panel(self._stats)
+        self._signals_table_cache_key = ""
+        self._signals_table_cache_payload = None
+        self._strategy_backtest_result = {}
         backup_note = f" | backup {backup_dir.name}" if backup_dir else ""
         active_name = next((str(a.get("name") or target_id) for a in self._paper_accounts if str(a.get("id") or "") == target_id), target_id)
         return f"Activated {active_name}{backup_note}"
@@ -6695,10 +7002,16 @@ class NepseDashboard(App):
         (target_dir / "tui_paper_orders.json").write_text("[]")
         (target_dir / "tui_paper_order_history.json").write_text("[]")
         now_stamp = datetime.now().isoformat(timespec="seconds")
-        accounts.append({"id": account_id, "name": name, "created_at": now_stamp, "updated_at": now_stamp})
-        registry["accounts"] = accounts
+        accounts.append({
+            "id": account_id,
+            "name": name,
+            "strategy_id": strategy_registry.default_strategy_for_account(account_id),
+            "created_at": now_stamp,
+            "updated_at": now_stamp,
+        })
+        registry["accounts"] = strategy_registry.ensure_account_strategy_ids(accounts)
         _save_accounts_registry(registry)
-        self._paper_accounts = accounts
+        self._paper_accounts = list(registry["accounts"])
         self._persist_profile_paths(portfolio_path=str(portfolio_path) if portfolio_path else "", target_nav=target_nav)
         self.query_one("#profile-inp-account-name", Input).value = f"Account {len(accounts) + 1}"
         self._selected_account_id = account_id

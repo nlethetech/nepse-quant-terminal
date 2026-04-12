@@ -1,0 +1,38 @@
+{
+  "id": "c5",
+  "name": "C5",
+  "description": "Public baseline strategy. Six-signal stack with fixed 35% sector cap, stock-only filtering, and 40-day holds.",
+  "source": "builtin",
+  "editable": false,
+  "config": {
+    "holding_days": 40,
+    "max_positions": 5,
+    "signal_types": [
+      "volume",
+      "quality",
+      "low_vol",
+      "mean_reversion",
+      "quarterly_fundamental",
+      "xsec_momentum"
+    ],
+    "rebalance_frequency": 5,
+    "stop_loss_pct": 0.08,
+    "trailing_stop_pct": 0.1,
+    "use_trailing_stop": true,
+    "use_regime_filter": true,
+    "sector_limit": 0.35,
+    "regime_max_positions": {
+      "bull": 5,
+      "neutral": 4,
+      "bear": 2
+    },
+    "bear_threshold": -0.05,
+    "initial_capital": 1000000,
+    "profit_target_pct": null,
+    "event_exit_mode": false
+  },
+  "notes": {
+    "public": true,
+    "stock_only": true
+  }
+}

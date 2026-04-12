@@ -30,6 +30,7 @@ from backend.agents.runtime_config import (
     EXPERIMENTAL_GEMMA4_MODEL as RUNTIME_EXPERIMENTAL_GEMMA4_MODEL,
     load_active_agent_config,
 )
+from backend.trading import strategy_registry
 from backend.quant_pro.nepse_calendar import current_nepal_datetime, get_market_schedule, market_session_phase
 from backend.quant_pro.control_plane.models import AgentDecision
 from backend.quant_pro.nepalosint_client import symbol_intelligence, unified_search
@@ -47,6 +48,7 @@ AGENT_ARCHIVE_FILE = migrate_legacy_path(
     AGENTS_RUNTIME_DIR / "agent_chat_archive.json",
     [PROJECT_ROOT / "agent_chat_archive.json"],
 )
+ACTIVE_SIGNALS_SNAPSHOT_FILE = AGENTS_RUNTIME_DIR / "active_signals_snapshot.json"
 OSINT_BASE = "https://nepalosint.com/api/v1"
 MAX_AGENT_HISTORY_ITEMS = 12
 MAX_AGENT_ARCHIVE_ITEMS = 240
@@ -447,6 +449,9 @@ def publish_external_agent_analysis(
     payload.setdefault("context_date", now_utc.strftime("%Y-%m-%d"))
     payload.setdefault("account_id", str(account.get("id") or "account_1"))
     payload.setdefault("account_name", str(account.get("name") or payload.get("account_id") or "account_1"))
+    strategy = _active_strategy_context()
+    payload.setdefault("strategy_id", str(strategy.get("id") or "c5"))
+    payload.setdefault("strategy_name", str(strategy.get("name") or payload.get("strategy_id") or "C5"))
     meta = dict(payload.get("agent_runtime_meta") or {})
     meta.update(
         {
@@ -455,6 +460,8 @@ def publish_external_agent_analysis(
             "updated_at": now_utc.replace(microsecond=0).isoformat(),
             "account_id": payload.get("account_id"),
             "account_name": payload.get("account_name"),
+            "strategy_id": payload.get("strategy_id"),
+            "strategy_name": payload.get("strategy_name"),
         }
     )
     payload["source"] = source
@@ -769,7 +776,11 @@ def _analysis_cache_is_fresh(analysis: dict | None) -> bool:
     if str(payload.get("context_date") or "") != _current_nst_session_date():
         return False
     active_account_id = str(_active_account_context().get("id") or "account_1")
-    return str(payload.get("account_id") or "") == active_account_id
+    active_strategy_id = str(_active_strategy_context().get("id") or "c5")
+    return (
+        str(payload.get("account_id") or "") == active_account_id
+        and str(payload.get("strategy_id") or "") == active_strategy_id
+    )
 
 
 def _clip_text(value: object, limit: int = 140) -> str:
@@ -794,6 +805,37 @@ def _active_account_context() -> dict:
         "dir": account_dir,
         "portfolio_path": portfolio_path,
     }
+
+
+def _active_strategy_context() -> dict:
+    strategy_id = str(os.environ.get("NEPSE_ACTIVE_STRATEGY_ID", "") or "").strip().lower() or "c5"
+    payload = strategy_registry.load_strategy(strategy_id) or {}
+    config = dict(payload.get("config") or LONG_TERM_CONFIG)
+    return {
+        "id": str(payload.get("id") or strategy_id),
+        "name": str(payload.get("name") or strategy_registry.strategy_name(strategy_id) or strategy_id.upper()),
+        "config": config,
+    }
+
+
+def _load_active_signals_snapshot() -> Optional[dict]:
+    if not ACTIVE_SIGNALS_SNAPSHOT_FILE.exists():
+        return None
+    try:
+        payload = json.loads(ACTIVE_SIGNALS_SNAPSHOT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("context_date") or "") != _current_nst_session_date():
+        return None
+    if str(payload.get("account_id") or "") != str(_active_account_context().get("id") or "account_1"):
+        return None
+    if str(payload.get("strategy_id") or "") != str(_active_strategy_context().get("id") or "c5"):
+        return None
+    if not isinstance(payload.get("signals"), list):
+        return None
+    return payload
 
 
 def _load_active_portfolio() -> tuple[list[dict], dict]:
@@ -1222,6 +1264,9 @@ def _gather_context() -> dict:
     if fresh_market:
         context["fresh_market"] = fresh_market
     context["macro_market"] = _fetch_macro_market_context()
+    strategy = _active_strategy_context()
+    context["strategy_id"] = str(strategy.get("id") or "c5")
+    context["strategy_name"] = str(strategy.get("name") or "C5")
 
     # 1. Algorithm signals + price data
     try:
@@ -1229,23 +1274,31 @@ def _gather_context() -> dict:
         from apps.classic.dashboard import MD, _db
         from backend.trading.live_trader import generate_signals
         md = MD(top_n=10)
-        conn = _db()
-        prices_df = load_all_prices(conn)
-        conn.close()
-        sigs, regime = generate_signals(
-            prices_df,
-            list(LONG_TERM_CONFIG["signal_types"]),
-            use_regime_filter=True,
-        )
+        config = dict(strategy.get("config") or LONG_TERM_CONFIG)
+        signal_types = list(config.get("signal_types") or LONG_TERM_CONFIG["signal_types"])
+        use_regime_filter = bool(config.get("use_regime_filter", True))
         regime_blocked = False
-        if not sigs and str(regime).lower() == "bear":
+        snapshot = _load_active_signals_snapshot()
+        if snapshot:
+            sigs = list(snapshot.get("signals") or [])[:AGENT_SHORTLIST_LIMIT]
+            regime = str(snapshot.get("regime") or "unknown")
+        else:
+            conn = _db()
+            prices_df = load_all_prices(conn)
+            conn.close()
             sigs, regime = generate_signals(
                 prices_df,
-                list(LONG_TERM_CONFIG["signal_types"]),
-                use_regime_filter=False,
+                signal_types,
+                use_regime_filter=use_regime_filter,
             )
-            regime_blocked = True
-        sigs = list(sigs or [])[:AGENT_SHORTLIST_LIMIT]
+            if not sigs and str(regime).lower() == "bear" and use_regime_filter:
+                sigs, regime = generate_signals(
+                    prices_df,
+                    signal_types,
+                    use_regime_filter=False,
+                )
+                regime_blocked = True
+            sigs = list(sigs or [])[:AGENT_SHORTLIST_LIMIT]
 
         context["signals"] = [
             {
@@ -1509,6 +1562,8 @@ def build_algo_shortlist_snapshot() -> dict:
         "market_view": "",
         "risks": [],
         "portfolio_note": "",
+        "strategy_id": ctx.get("strategy_id", "c5"),
+        "strategy_name": ctx.get("strategy_name", "C5"),
         "stocks": [],
     }
     return _merge_agent_output_with_shortlist(preview, ctx)
@@ -1706,7 +1761,9 @@ REVIEW is forbidden in the final stock verdicts. Every real shortlisted stock mu
     analysis = {"raw_response": raw, "timestamp": time.time(),
                 "context_date": ctx.get("session_date", ""),
                 "regime": ctx.get("regime", "unknown"),
-                "fresh_market": dict(ctx.get("fresh_market") or {})}
+                "fresh_market": dict(ctx.get("fresh_market") or {}),
+                "strategy_id": ctx.get("strategy_id", "c5"),
+                "strategy_name": ctx.get("strategy_name", "C5")}
     try:
         text = raw
         if "```" in text:

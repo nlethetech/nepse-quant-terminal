@@ -153,6 +153,13 @@ Screen {
     border: solid #3c434a;
 }
 
+#dt-strategy-list {
+    height: 7;
+    margin: 0 1 1 1;
+    background: #060b11;
+    border: solid #3c434a;
+}
+
 #profile-shortcuts {
     height: 1;
     margin: 0 1 1 1;
@@ -163,7 +170,9 @@ Screen {
 
 #profile-primary-row,
 #profile-seed-row,
-#profile-actions {
+#profile-actions,
+#strategy-actions,
+#strategy-backtest-row {
     height: auto;
     min-height: 3;
     margin: 0 1 1 1;
@@ -240,6 +249,12 @@ Screen {
     margin-right: 1;
 }
 
+#strategy-actions Button {
+    width: 18;
+    min-width: 18;
+    margin-right: 1;
+}
+
 .profile-action-button {
     background: #575d63;
     color: #f2f4f5;
@@ -258,6 +273,16 @@ Screen {
     padding: 0 1;
 }
 
+#strategy-summary,
+#strategy-backtest-summary {
+    height: auto;
+    margin: 0 1 1 1;
+    background: #111315;
+    color: #c4c8cd;
+    border: solid #4a4f54;
+    padding: 0 1;
+}
+
 #profile-note {
     height: auto;
     color: #a0a5aa;
@@ -265,9 +290,12 @@ Screen {
 }
 
 #dt-account-list:focus,
+#dt-strategy-list:focus,
 #profile-primary-row:focus-within,
 #profile-seed-row:focus-within,
 #profile-actions:focus-within,
+#strategy-actions:focus-within,
+#strategy-backtest-row:focus-within,
 #account-help:focus-within {
     border: solid #7a7f84;
 }

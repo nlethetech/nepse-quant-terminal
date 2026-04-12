@@ -78,6 +78,7 @@ from backend.quant_pro.paths import (
     migrate_legacy_path,
 )
 from backend.quant_pro.signal_ranking import rank_signal_candidates
+from backend.quant_pro.signal_ranking import is_tradeable_signal_symbol
 from backend.quant_pro.control_plane.command_service import build_live_trader_control_plane
 from backend.quant_pro.vendor_api import (
     fetch_latest_ltp,
@@ -112,19 +113,23 @@ from backend.quant_pro.tms_session import validate_live_setup
 
 # Signal generators from simple_backtest
 from backend.backtesting.simple_backtest import (
+    compute_liquid_universe,
     compute_market_regime,
     generate_low_volatility_signals_at_date,
+    generate_mean_reversion_signals_at_date,
     generate_momentum_signals_at_date,
+    generate_quarterly_fundamental_signals_at_date,
     generate_quality_signals_at_date,
     generate_volume_breakout_signals_at_date,
     generate_52wk_high_signals_at_date,
-    apply_amihud_tilt,
-    get_symbol_sector,
+    generate_xsec_momentum_signals_at_date,
     load_all_prices,
+    get_symbol_sector,
 )
 from backend.quant_pro.disposition import generate_cgo_signals_at_date
 from backend.quant_pro.lead_lag import generate_sector_leadlag_signals_at_date
-from backend.quant_pro.macro_signals import get_nrb_policy_regime
+from backend.quant_pro.quarterly_fundamental import QuarterlyFundamentalModel
+from backend.quant_pro.satellite_data import generate_hydro_rainfall_signals_at_date
 from validation.transaction_costs import TransactionCostModel as NepseFees
 from validation.kill_switch import KillSwitch
 
@@ -1756,39 +1761,42 @@ def generate_signals(
 ) -> Tuple[List[dict], str]:
     """Generate buy signals at current date using historical price data.
 
-    Includes: volume breakout, quality, low_vol, mean_reversion (core) +
-    CGO disposition, lead-lag sector spillover, 52-week high proximity,
-    Amihud illiquidity tilt, NRB macro overlay (extended signals).
+    Supports only the explicitly requested signal families and filters the
+    final shortlist down to tradeable stock symbols.
 
     Returns (signals_list, regime_str).
     """
     today = pd.Timestamp(now_nst().date())
 
     regime = compute_market_regime(prices_df, today)
-    if use_regime_filter and regime == "bear":
-        logger.info("Bear regime detected — skipping signal generation")
-        return [], regime
-
-    # Regime confidence multiplier (matches generate_daily_signals.py logic)
-    regime_mult = {"bull": 1.15, "neutral": 0.90}.get(regime, 1.0)
-
-    # NRB monetary policy rate overlay
-    nrb_mult = 1.0
-    nrb_sector_adj: dict = {}
-    try:
-        nrb = get_nrb_policy_regime(db_path=str(get_db_path()))
-        nrb_mult = nrb["multiplier"]
-        nrb_sector_adj = nrb.get("sector_adjustments", {})
-        if nrb["cycle"] != "no_data":
-            logger.info(
-                "NRB policy: %s (rate=%.1f%%, %+.0fbps, mult=%.2f)",
-                nrb["cycle"].upper(), nrb["latest_rate_pct"] or 0,
-                nrb["rate_change_bps"], nrb_mult,
-            )
-    except Exception as e:
-        logger.warning("NRB policy regime failed (skipping): %s", e)
 
     all_signals = []
+    liquid_symbols = None
+    if any(
+        st in signal_types
+        for st in (
+            "quarterly_fundamental",
+            "xsec_momentum",
+            "52wk_high",
+            "disposition",
+            "lead_lag",
+            "satellite_hydro",
+        )
+    ):
+        try:
+            liquid_symbols = compute_liquid_universe(prices_df, today)
+        except Exception as e:
+            logger.warning("Liquid-universe computation failed: %s", e)
+
+    quarterly_model = None
+    if "quarterly_fundamental" in signal_types:
+        try:
+            conn = sqlite3.connect(str(get_db_path()))
+            quarterly_model = QuarterlyFundamentalModel.from_connection(conn)
+            conn.close()
+        except Exception as e:
+            logger.warning("Quarterly fundamentals unavailable: %s", e)
+            quarterly_model = None
 
     # Core signals
     if "momentum" in signal_types:
@@ -1811,45 +1819,69 @@ def generate_signals(
             all_signals.extend(generate_quality_signals_at_date(prices_df, today))
         except Exception as e:
             logger.warning("Quality signals failed: %s", e)
+    if "mean_reversion" in signal_types:
+        try:
+            all_signals.extend(generate_mean_reversion_signals_at_date(prices_df, today))
+        except Exception as e:
+            logger.warning("Mean reversion signals failed: %s", e)
+    if "quarterly_fundamental" in signal_types and quarterly_model is not None:
+        try:
+            all_signals.extend(
+                generate_quarterly_fundamental_signals_at_date(
+                    prices_df,
+                    today,
+                    quarterly_model,
+                    liquid_symbols=liquid_symbols,
+                )
+            )
+        except Exception as e:
+            logger.warning("Quarterly fundamental signals failed: %s", e)
+    if "xsec_momentum" in signal_types:
+        try:
+            all_signals.extend(
+                generate_xsec_momentum_signals_at_date(
+                    prices_df,
+                    today,
+                    liquid_symbols=liquid_symbols,
+                )
+            )
+        except Exception as e:
+            logger.warning("Xsec momentum signals failed: %s", e)
 
-    # Extended signals — all fail-open
-    try:
-        cgo = generate_cgo_signals_at_date(prices_df, today)
-        logger.info("CGO signals: %d", len(cgo))
-        all_signals.extend(cgo)
-    except Exception as e:
-        logger.warning("CGO signals failed (skipping): %s", e)
+    if "disposition" in signal_types:
+        try:
+            cgo = generate_cgo_signals_at_date(prices_df, today, liquid_symbols=liquid_symbols)
+            logger.info("CGO signals: %d", len(cgo))
+            all_signals.extend(cgo)
+        except Exception as e:
+            logger.warning("CGO signals failed (skipping): %s", e)
 
-    try:
-        ll = generate_sector_leadlag_signals_at_date(prices_df, today)
-        logger.info("Lead-lag signals: %d", len(ll))
-        all_signals.extend(ll)
-    except Exception as e:
-        logger.warning("Lead-lag signals failed (skipping): %s", e)
+    if "lead_lag" in signal_types:
+        try:
+            ll = generate_sector_leadlag_signals_at_date(prices_df, today, liquid_symbols=liquid_symbols)
+            logger.info("Lead-lag signals: %d", len(ll))
+            all_signals.extend(ll)
+        except Exception as e:
+            logger.warning("Lead-lag signals failed (skipping): %s", e)
 
-    try:
-        wk52 = generate_52wk_high_signals_at_date(prices_df, today)
-        logger.info("52Wk-high signals: %d", len(wk52))
-        all_signals.extend(wk52)
-    except Exception as e:
-        logger.warning("52Wk-high signals failed (skipping): %s", e)
+    if "52wk_high" in signal_types:
+        try:
+            wk52 = generate_52wk_high_signals_at_date(prices_df, today, liquid_symbols=liquid_symbols)
+            logger.info("52Wk-high signals: %d", len(wk52))
+            all_signals.extend(wk52)
+        except Exception as e:
+            logger.warning("52Wk-high signals failed (skipping): %s", e)
 
-    # Amihud illiquidity tilt (overlay — modifies strength in-place)
-    try:
-        all_signals = apply_amihud_tilt(all_signals, prices_df, today)
-    except Exception as e:
-        logger.warning("Amihud tilt failed (skipping): %s", e)
-
-    # Apply regime + NRB confidence multipliers
-    combined_mult = regime_mult * nrb_mult
-    for sig in all_signals:
-        sig.confidence = min(sig.confidence * combined_mult, 0.95)
-        sector = get_symbol_sector(sig.symbol)
-        sector_mult = nrb_sector_adj.get(sector, 1.0)
-        if abs(sector_mult - 1.0) > 1e-6:
-            sig.confidence = min(sig.confidence * sector_mult, 0.95)
+    if "satellite_hydro" in signal_types:
+        try:
+            hydro = generate_hydro_rainfall_signals_at_date(prices_df, today, liquid_symbols=liquid_symbols)
+            logger.info("Satellite hydro signals: %d", len(hydro))
+            all_signals.extend(hydro)
+        except Exception as e:
+            logger.warning("Satellite hydro signals failed (skipping): %s", e)
 
     # Rank by strength * confidence
+    all_signals = [sig for sig in all_signals if is_tradeable_signal_symbol(getattr(sig, "symbol", ""))]
     all_signals.sort(key=lambda s: s.strength * s.confidence, reverse=True)
 
     results = []

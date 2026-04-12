@@ -1,0 +1,36 @@
+{
+  "id": "sat06",
+  "name": "SAT06",
+  "description": "Public satellite strategy. Quality + quarterly fundamentals + cross-sectional momentum + satellite hydro, with 45-day holds.",
+  "source": "builtin",
+  "editable": false,
+  "config": {
+    "signal_types": [
+      "quality",
+      "quarterly_fundamental",
+      "xsec_momentum",
+      "satellite_hydro"
+    ],
+    "holding_days": 45,
+    "max_positions": 5,
+    "rebalance_frequency": 5,
+    "stop_loss_pct": 0.15,
+    "trailing_stop_pct": 0.2,
+    "use_trailing_stop": true,
+    "use_regime_filter": true,
+    "sector_limit": 0.35,
+    "regime_max_positions": {
+      "bull": 5,
+      "neutral": 4,
+      "bear": 2
+    },
+    "bear_threshold": -0.05,
+    "initial_capital": 1000000,
+    "profit_target_pct": null,
+    "event_exit_mode": false
+  },
+  "notes": {
+    "public": true,
+    "stock_only": true
+  }
+}

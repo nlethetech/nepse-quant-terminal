@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from backend.quant_pro.event_layer import EventAdjustmentContext
-from backend.quant_pro.signal_ranking import rank_signal_candidates
+from backend.quant_pro.signal_ranking import is_tradeable_signal_symbol, rank_signal_candidates
 
 
 def test_rank_signal_candidates_merges_duplicate_symbol_support():
@@ -91,3 +91,22 @@ def test_missing_event_data_keeps_base_order():
     )
 
     assert [item["symbol"] for item in ranked] == ["AAA", "BBB"]
+
+
+def test_tradeable_signal_symbol_rejects_index_and_sector_proxies():
+    assert is_tradeable_signal_symbol("NABIL")
+    assert not is_tradeable_signal_symbol("NEPSE")
+    assert not is_tradeable_signal_symbol("SECTOR::BANKING")
+
+
+def test_rank_signal_candidates_skips_non_tradeable_symbols():
+    ranked = rank_signal_candidates(
+        [
+            {"symbol": "NEPSE", "signal_type": "fundamental", "strength": 0.50, "confidence": 0.50},
+            {"symbol": "SECTOR::BANKING", "signal_type": "fundamental", "strength": 0.60, "confidence": 0.50},
+            {"symbol": "AAA", "signal_type": "fundamental", "strength": 0.40, "confidence": 0.50},
+        ],
+        sector_lookup=lambda _symbol: None,
+    )
+
+    assert [item["symbol"] for item in ranked] == ["AAA"]
