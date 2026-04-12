@@ -1549,6 +1549,65 @@ def _merge_agent_output_with_shortlist(parsed: dict, ctx: dict) -> dict:
     return enriched
 
 
+def _extract_agent_json_payload(raw: str) -> dict:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    if "```" in text:
+        parts = text.split("```")
+        if len(parts) >= 2:
+            text = parts[1]
+            if text.startswith("json"):
+                text = text[4:]
+    start = text.find("{")
+    if start < 0:
+        return {}
+    candidate = text[start:]
+    end = candidate.rfind("}")
+    if end >= 0:
+        candidate = candidate[: end + 1]
+    try:
+        parsed = json.loads(candidate)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        pass
+
+    marker_match = re.search(r'"stocks"\s*:\s*\[', candidate)
+    if marker_match is None:
+        return {}
+    marker_idx = marker_match.start()
+    marker = marker_match.group(0)
+
+    header = candidate[:marker_idx] + '"stocks": []}'
+    try:
+        repaired = json.loads(header)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(repaired, dict):
+        return {}
+
+    decoder = json.JSONDecoder()
+    stocks_blob = candidate[marker_idx + len(marker):]
+    rows: list[dict] = []
+    idx = 0
+    while idx < len(stocks_blob):
+        while idx < len(stocks_blob) and stocks_blob[idx] in " \r\n\t,":
+            idx += 1
+        if idx >= len(stocks_blob) or stocks_blob[idx] == "]":
+            break
+        try:
+            item, next_idx = decoder.raw_decode(stocks_blob, idx)
+        except json.JSONDecodeError:
+            break
+        if isinstance(item, dict):
+            rows.append(item)
+        idx = next_idx
+    repaired["stocks"] = rows
+    repaired["_partial_parse"] = True
+    repaired["_partial_stock_count"] = len(rows)
+    return repaired
+
+
 def build_algo_shortlist_snapshot() -> dict:
     """Return the ranked algo shortlist without waiting for full agent analysis."""
     ctx = _gather_context()
@@ -1764,18 +1823,10 @@ REVIEW is forbidden in the final stock verdicts. Every real shortlisted stock mu
                 "fresh_market": dict(ctx.get("fresh_market") or {}),
                 "strategy_id": ctx.get("strategy_id", "c5"),
                 "strategy_name": ctx.get("strategy_name", "C5")}
-    try:
-        text = raw
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            parsed = json.loads(text[start:end])
-            analysis.update(parsed)
-    except (json.JSONDecodeError, IndexError):
+    parsed = _extract_agent_json_payload(raw)
+    if parsed:
+        analysis.update(parsed)
+    else:
         analysis["parse_error"] = True
 
     analysis = _merge_agent_output_with_shortlist(analysis, ctx)

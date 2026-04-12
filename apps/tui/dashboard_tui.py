@@ -4583,12 +4583,20 @@ class NepseDashboard(App):
         os.environ["NEPSE_ACTIVE_STRATEGY_NAME"] = self._active_strategy_name()
 
     def _current_agent_provider_label(self) -> str:
-        meta = dict((getattr(self, "_agent_analysis", {}) or {}).get("agent_runtime_meta") or {})
-        return str(
-            meta.get("provider")
+        try:
+            cfg = load_active_agent_config()
+        except Exception:
+            cfg = {}
+        configured = str(
+            cfg.get("provider_label")
+            or cfg.get("backend")
             or os.environ.get("NEPSE_AGENT_PROVIDER_LABEL")
             or "gemma4_mlx"
-        )
+        ).strip()
+        if configured:
+            return configured
+        meta = dict((getattr(self, "_agent_analysis", {}) or {}).get("agent_runtime_meta") or {})
+        return str(meta.get("provider") or "gemma4_mlx")
 
     def _stop_active_agent_chat(self, *, announce: bool = True) -> bool:
         proc = getattr(self, "_agent_chat_process", None)
@@ -5526,7 +5534,7 @@ class NepseDashboard(App):
         n_super = sum(1 for s in stocks if bool(s.get("auto_entry_candidate")))
         regime = a.get("regime", "?")
         meta = dict(a.get("agent_runtime_meta") or {})
-        provider = str(meta.get("provider") or "sonnet").upper()
+        provider = self._current_agent_provider_label().upper()
         import time as _t
         age = _t.time() - a.get("timestamp", 0)
         age_str = f"{int(age/60)}m ago" if age < 3600 else f"{int(age/3600)}h ago" if age < 86400 else "stale"
@@ -5546,7 +5554,7 @@ class NepseDashboard(App):
         stocks = list((analysis or {}).get("stocks") or [])
         left = self.query_one("#agent-picks-subtitle", Static)
         right = self.query_one("#agent-chat-subtitle", Static)
-        provider = str(dict((analysis or {}).get("agent_runtime_meta") or {}).get("provider") or "agent").upper()
+        provider = self._current_agent_provider_label().upper()
         if stocks:
             buy_count = sum(1 for row in stocks if str(row.get("action_label") or "").upper() == "BUY")
             super_count = sum(1 for row in stocks if bool(row.get("auto_entry_candidate")))
