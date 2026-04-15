@@ -2607,10 +2607,9 @@ class ModeSelectScreen(ModalScreen):
     }
     """
 
-    _selected: int = 0  # 0 = paper, 1 = live
+    _selected: int = 0
     _options = [
         ("paper", "PAPER", "Paper trading workspace and local portfolio"),
-        ("live", "LIVE", "Broker-linked TMS19 execution workspace"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -2623,12 +2622,11 @@ class ModeSelectScreen(ModalScreen):
                     classes="mode-brand",
                 )
                 yield Static(
-                    Text.from_markup("[#5d6670]Terminal v2.0  ◆  Powered by NepalOSINT[/]"),
+                    Text.from_markup("[#5d6670]Terminal v3  ◆  Paper Trading[/]"),
                     classes="mode-version",
                 )
             with Vertical(id="mode-options"):
                 yield Static("", id="mode-opt-0", classes="mode-row")
-                yield Static("", id="mode-opt-1", classes="mode-row")
             with Vertical(id="mode-footer"):
                 yield Static(
                     Text.from_markup(
