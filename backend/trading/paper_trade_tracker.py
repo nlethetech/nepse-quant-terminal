@@ -1,9 +1,19 @@
 import argparse
-import fcntl
 import logging
 import os
 from datetime import datetime
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+    try:
+        import msvcrt
+    except ImportError:
+        msvcrt = None
+else:
+    msvcrt = None
 
 import pandas as pd
 
@@ -20,6 +30,28 @@ from backend.quant_pro.database import get_db_path
 from backend.quant_pro.paths import ensure_dir, get_project_root, get_trading_runtime_dir, migrate_legacy_path
 
 logger = logging.getLogger(__name__)
+
+
+def _lock_file_exclusive(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    if msvcrt is not None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    raise RuntimeError("No file-lock implementation available on this platform")
+
+
+def _unlock_file(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    raise RuntimeError("No file-lock implementation available on this platform")
 
 # --- CONFIGURATION ---
 # Resolve paths at call-time so Streamlit profile switches work.
@@ -71,11 +103,11 @@ class RiskManager:
     def save_watermarks(watermarks: pd.DataFrame, watermark_file: str):
         """Save high watermark data with file locking."""
         with open(watermark_file, 'w') as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
+            _lock_file_exclusive(f)
             try:
                 watermarks.to_csv(f, index=False)
             finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
+                _unlock_file(f)
 
     @staticmethod
     def update_watermark(watermarks: pd.DataFrame, symbol: str, current_price: float) -> pd.DataFrame:

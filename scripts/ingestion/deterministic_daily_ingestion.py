@@ -22,6 +22,10 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set
 
 import pandas as pd
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from backend.quant_pro.database import get_db_path, save_to_db
 from backend.quant_pro.institutional import (
     INGESTION_RUN_STATUS,
@@ -61,6 +65,15 @@ def _fetch_all_rows(conn: sqlite3.Connection, query: str, params: Sequence = ())
     return cur.fetchall()
 
 
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        (table_name,),
+    )
+    return cur.fetchone() is not None
+
+
 def get_symbol_universe(
     conn: sqlite3.Connection,
     source: str,
@@ -70,19 +83,22 @@ def get_symbol_universe(
     symbols: Set[str] = set()
 
     if source in {"db", "both", "all"}:
-        rows = _fetch_all_rows(
-            conn,
-            """
-            SELECT DISTINCT symbol
-            FROM stock_prices
-            WHERE symbol NOT LIKE 'SECTOR::%'
-            """,
-        )
-        symbols.update(str(r[0]).strip().upper() for r in rows if r[0])
+        if _table_exists(conn, "stock_prices"):
+            rows = _fetch_all_rows(
+                conn,
+                """
+                SELECT DISTINCT symbol
+                FROM stock_prices
+                WHERE symbol NOT LIKE 'SECTOR::%'
+                """,
+            )
+            symbols.update(str(r[0]).strip().upper() for r in rows if r[0])
+        else:
+            print("[ingestion] table 'stock_prices' not found; skipping db source")
 
     if source in {"quotes", "both", "all"}:
         # Include ALL symbols from live market quotes (full NEPSE universe)
-        try:
+        if _table_exists(conn, "market_quotes"):
             rows = _fetch_all_rows(
                 conn,
                 """
@@ -94,19 +110,22 @@ def get_symbol_universe(
                 """,
             )
             symbols.update(str(r[0]).strip().upper() for r in rows if r[0])
-        except Exception:
-            pass  # table may not exist
+        else:
+            print("[ingestion] table 'market_quotes' not found; skipping quotes source")
 
     if source in {"watchlist", "both", "all"}:
-        if watchlist_id is not None:
-            rows = _fetch_all_rows(
-                conn,
-                "SELECT DISTINCT symbol FROM watchlist_items WHERE watchlist_id = ?",
-                (watchlist_id,),
-            )
+        if _table_exists(conn, "watchlist_items"):
+            if watchlist_id is not None:
+                rows = _fetch_all_rows(
+                    conn,
+                    "SELECT DISTINCT symbol FROM watchlist_items WHERE watchlist_id = ?",
+                    (watchlist_id,),
+                )
+            else:
+                rows = _fetch_all_rows(conn, "SELECT DISTINCT symbol FROM watchlist_items")
+            symbols.update(str(r[0]).strip().upper() for r in rows if r[0])
         else:
-            rows = _fetch_all_rows(conn, "SELECT DISTINCT symbol FROM watchlist_items")
-        symbols.update(str(r[0]).strip().upper() for r in rows if r[0])
+            print("[ingestion] table 'watchlist_items' not found; skipping watchlist source")
 
     if source in {"file", "all"} and symbols_file is not None:
         for line in symbols_file.read_text(encoding="utf-8").splitlines():

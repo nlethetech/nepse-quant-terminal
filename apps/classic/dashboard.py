@@ -12,13 +12,24 @@ import os
 import re
 import sqlite3
 import sys
-import termios
 import threading
 import time
-import tty
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
+
+try:
+    import termios
+    import tty
+except ImportError:
+    termios = None
+    tty = None
+    try:
+        import msvcrt
+    except ImportError:
+        msvcrt = None
+else:
+    msvcrt = None
 
 import pandas as pd
 from rich import box
@@ -547,6 +558,19 @@ def _render_frame(tw: int, d: MD, tab: int, lk: str, msg: str) -> str:
 # ── keyboard ──────────────────────────────────────────────────────────────────
 
 def _read_key() -> str:
+    if msvcrt is not None:
+        try:
+            ch = msvcrt.getwch()
+            if ch in ("\x00", "\xe0"):
+                # Windows function and arrow keys are returned as a two-part sequence.
+                ch += msvcrt.getwch()
+            return ch
+        except Exception:
+            return ""
+
+    if termios is None or tty is None:
+        return ""
+
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:

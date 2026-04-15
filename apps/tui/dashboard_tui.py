@@ -7,7 +7,6 @@ Keys: 1-9 tabs │ / search │ L lookup │ R refresh │ Q quit
 """
 from __future__ import annotations
 
-import fcntl
 import copy
 import json as _json
 import logging
@@ -24,8 +23,16 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse, unquote
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+    import msvcrt
+else:
+    msvcrt = None
 
 import pandas as pd
 import requests as _requests
@@ -381,10 +388,32 @@ def _paper_filled_orders_for_day(order_history: list[dict] | None, day: str) -> 
     return filled
 
 
+def _lock_file_exclusive(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    if msvcrt is not None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    raise RuntimeError("No file-lock implementation available on this platform")
+
+
+def _unlock_file(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    raise RuntimeError("No file-lock implementation available on this platform")
+
+
 def _write_json_locked(path: Path, payload: Any) -> None:
     ensure_dir(path.parent)
     with path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        _lock_file_exclusive(handle)
         try:
             handle.seek(0)
             handle.truncate()
@@ -393,7 +422,7 @@ def _write_json_locked(path: Path, payload: Any) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _unlock_file(handle)
 
 
 def _load_macro_indicator_history() -> dict[str, dict]:

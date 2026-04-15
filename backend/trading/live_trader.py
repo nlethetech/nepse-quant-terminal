@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
-import fcntl
 import json
 import logging
 import os
@@ -39,6 +38,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+    try:
+        import msvcrt
+    except ImportError:
+        msvcrt = None
+else:
+    msvcrt = None
 
 import pandas as pd
 
@@ -581,11 +591,33 @@ def save_runtime_state(path: str, state: Dict[str, Any]) -> None:
     tmp.replace(p)
 
 
+def _lock_file_exclusive(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    if msvcrt is not None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    raise RuntimeError("No file-lock implementation available on this platform")
+
+
+def _unlock_file(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    raise RuntimeError("No file-lock implementation available on this platform")
+
+
 def _append_json_list_entry_locked(path: str | Path, entry: Dict[str, Any]) -> None:
     """Append one entry to a JSON list file shared across trader and TUI processes."""
     target = _ensure_parent_path(path)
     with target.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        _lock_file_exclusive(handle)
         try:
             handle.seek(0)
             try:
@@ -602,7 +634,7 @@ def _append_json_list_entry_locked(path: str | Path, entry: Dict[str, Any]) -> N
             handle.flush()
             os.fsync(handle.fileno())
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _unlock_file(handle)
 
 
 def _load_json_list_file(path: str | Path) -> List[Dict[str, Any]]:
@@ -619,7 +651,7 @@ def _load_json_list_file(path: str | Path) -> List[Dict[str, Any]]:
 def _mutate_json_list_locked(path: str | Path, mutator) -> Any:
     target = _ensure_parent_path(path)
     with target.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        _lock_file_exclusive(handle)
         try:
             handle.seek(0)
             try:
@@ -637,7 +669,7 @@ def _mutate_json_list_locked(path: str | Path, mutator) -> Any:
             os.fsync(handle.fileno())
             return result
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _unlock_file(handle)
 
 
 def _source_owned_by_live_trader(source: Optional[str]) -> bool:
