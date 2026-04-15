@@ -2650,18 +2650,8 @@ class LiveTrader:
         return build_live_trader_control_plane(self)
 
     def _start_live_execution_service(self) -> None:
-        if not self.live_execution_enabled:
-            return
-        if self.live_execution_service is not None:
-            return
-            self.live_settings,
-            snapshot_provider=self._execution_snapshot,
-            result_callback=self._handle_live_execution_result,
-        )
-        if self.live_halt_level != "none":
-            self.live_execution_service.set_halt(self.live_halt_level, reason=self.live_freeze_reason)
-        self.live_execution_service.start()
-        self._log_activity(f"Live execution service ready ({self.execution_mode})")
+        """Live execution service not available in public release."""
+        return
 
     def _best_effort_limit_price(self, symbol: str, side: ExecutionAction, ltp: float) -> float:
         return estimate_execution_price(

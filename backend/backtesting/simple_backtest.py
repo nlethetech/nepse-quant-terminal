@@ -2436,44 +2436,7 @@ def run_backtest(
 
             # informed_trading / broker_flow signal: not included in public release
 
-            if "smart_money" in signal_types and broker_v2_df is not None:
-                # V2 smart money: confluence booster + circular exclusion filter.
-                # Does NOT add new signals to the pool — only boosts base signals that
-                # are ALSO confirmed by smart broker flow. Avoids displacing good base picks.
-                    generate_smart_money_signals_at_date,
-                    get_circular_pump_stocks,
-                )
-                # Step 1: exclude confirmed circular/pump stocks from liquid universe
-                circular_stocks = get_circular_pump_stocks(broker_v2_df, current_date)
-                if circular_stocks and liquid_symbols is not None:
-                    liquid_symbols = [s for s in liquid_symbols if s not in circular_stocks]
-
-                # Step 2: get smart_money confirmed symbols (no liquid filter — cast wide)
-                sm_signals = generate_smart_money_signals_at_date(
-                    broker_v2_df, prices_df, current_date,
-                    liquid_symbols=None,
-                )
-                sm_confirmed = {s.symbol: s.strength for s in sm_signals}
-
-                # Step 3: boost existing base signals for confirmed symbols (+20% strength)
-                if sm_confirmed and all_signals:
-                    for sig in all_signals:
-                        if sig.symbol in sm_confirmed:
-                            sig.strength = min(sig.strength * 1.20, 1.0)
-
-            if "smart_money_pure" in signal_types and broker_v2_df is not None:
-                # Standalone broker-only mode: smart_money as sole signal source.
-                # Used to test whether broker flow has independent alpha.
-                    generate_smart_money_signals_at_date,
-                    get_circular_pump_stocks,
-                )
-                circular_stocks = get_circular_pump_stocks(broker_v2_df, current_date)
-                if circular_stocks and liquid_symbols is not None:
-                    liquid_symbols = [s for s in liquid_symbols if s not in circular_stocks]
-                all_signals.extend(generate_smart_money_signals_at_date(
-                    broker_v2_df, prices_df, current_date,
-                    liquid_symbols=liquid_symbols,
-                ))
+            # Signal plugin: smart_money (not included in public release)
 
             # Amihud illiquidity tilt: boost moderately illiquid stocks
             if "amihud_tilt" in signal_types and all_signals:

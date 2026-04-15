@@ -72,3 +72,15 @@ class FundamentalScanner:
 
     def scan(self) -> List[AlphaSignal]:
         return []
+
+
+class MomentumScanner:
+    """Stub momentum scanner."""
+    def calculate_signals(self, prices, volumes) -> List[AlphaSignal]:
+        return []
+
+
+class LiquidityScanner:
+    """Stub liquidity scanner."""
+    def calculate_signals(self, prices, volumes) -> List[AlphaSignal]:
+        return []

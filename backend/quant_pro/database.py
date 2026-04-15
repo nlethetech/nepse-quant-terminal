@@ -427,6 +427,7 @@ def init_db():
 
     cursor.execute(
         '''
+        CREATE TABLE IF NOT EXISTS broker_summary (
             symbol TEXT NOT NULL,
             as_of_date DATE NOT NULL,
             broker_code INTEGER NOT NULL,
@@ -443,13 +444,10 @@ def init_db():
         )
         '''
     )
-    cursor.execute(
-        '''
-        '''
-    )
 
     cursor.execute(
         '''
+        CREATE TABLE IF NOT EXISTS broker_signal_scores (
             symbol TEXT NOT NULL,
             as_of_date DATE NOT NULL,
             total_trades INTEGER NOT NULL,
@@ -462,10 +460,6 @@ def init_db():
             flags TEXT,
             PRIMARY KEY (symbol, as_of_date)
         )
-        '''
-    )
-    cursor.execute(
-        '''
         '''
     )
     cursor.execute(

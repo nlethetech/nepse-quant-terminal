@@ -134,6 +134,7 @@ def _hgrid(panels: list, total_width: int) -> str:
 # ── data ──────────────────────────────────────────────────────────────────────
 
 class MD:
+    def __init__(self, top_n: int = 50):
         self.top_n = top_n
         self.err: Optional[str] = None
         self.latest = self.prev_d = "—"
@@ -491,93 +492,8 @@ def _tab_bar(active: int) -> Text:
 
 
 def p_tms(d: MD) -> Panel:
-    """TMS live panel: WS status, balance, indices, reconciler report."""
-    if d.tms is None:
-        return _panel(
-            Text("\n  TMS live feed disabled (no session or --no-tms).\n"
-            "◎ TMS LIVE", CYAN)
-
-    rows: list = []
-    try:
-        st = d.tms.status()
-        live = d.tms.is_live()
-    except Exception as e:
-        return _panel(Text(f"\n  tms.status() failed: {e}\n", style=LOSS), "◎ TMS LIVE", CYAN)
-
-    live_tag = Text("● LIVE", style=f"bold {GAIN_HI}") if live else Text("○ STALE", style=f"bold {LOSS}")
-    connected_tag = Text("connected", style=GAIN) if st["connected"] else Text("disconnected", style=LOSS)
-    hdr = Text.assemble(
-        ("  WS ", LABEL), live_tag, ("   ", ""), connected_tag,
-        ("   tickers=", LABEL), (str(st["tickers"]), WHITE),
-        ("   indices=", LABEL), (str(st["indices"]), WHITE),
-        ("   last_frame=", LABEL),
-        (str(st["last_frame_at"] or "—")[-15:-6] if st["last_frame_at"] else "—", DIM),
-    )
-    rows.append(hdr)
-
-    # Balance snapshot
-    bal = d.tms_balance or {}
-    bs = bal.get("balanceSummary") or {}
-    dh = bal.get("depositoryHoldings") or {}
-    bal_line = Text.assemble(
-        ("  Collateral ", LABEL), _npr(float(bs.get("collateralAmount") or 0.0)),
-        ("   Payable ", LABEL), _npr(float(bs.get("payableAmount") or 0.0)),
-        ("   Receivable ", LABEL), _npr(float(bs.get("receivableAmount") or 0.0)),
-        ("   Holdings ", LABEL), (str(dh.get("totalHoldings") or 0), WHITE),
-        ("   Closing ", LABEL), _npr(float(dh.get("totalAmountClosing") or 0.0)),
-    )
-    rows.append(bal_line)
-
-    # Indices table
-    idx_map = d.tms_indices or {}
-    if idx_map:
-        t = _tbl([("INDEX","left",14),("VALUE","right",10),("CHG","right",8),("CHG%","right",8)])
-        for code in sorted(idx_map.keys()):
-            snap = idx_map[code]
-            t.add_row(
-                Text(code, style=f"bold {WHITE}"),
-                f"{snap.value:,.2f}",
-                _pct(snap.change),
-                _pct(snap.pct_change),
-            )
-        rows.append(t)
-    else:
-        rows.append(Text("  (no index data yet)", style=DIM))
-
-    # Reconciler status
-    try:
-        port = load_port()
-        local_pos = [
-            {"symbol": str(r["Symbol"]), "quantity": int(r["Quantity"])}
-            for _, r in port.iterrows()
-        ] if not port.empty else []
-        # Pull remote holdings from cached balance; falls back to empty list.
-        remote_pos: List[Dict] = []
-        try:
-            if d.tms is not None:
-                p = d.tms._client.client_portfolio_detail()
-                payload = (p or {}).get("payload") or {}
-                remote_pos = payload.get("data") or []
-        except Exception:
-            remote_pos = []
-        rep_h = tr.reconcile_holdings(local_pos, remote_pos)
-        rep_b = tr.reconcile_balance(0.0, bs, tolerance_npr=1.0) if bs else None
-        sum_line = f"  Reconciler: holdings={rep_h.summary()}"
-        if rep_b is not None:
-            sum_line += f"  │  balance={rep_b.summary()}"
-        style = DIM if rep_h.ok and (rep_b is None or rep_b.ok) else f"bold {LOSS}"
-        rows.append(Text(sum_line, style=style))
-    except Exception as e:
-        rows.append(Text(f"  reconciler error: {e}", style=DIM))
-
-    # Order layer status
-    try:
-                       " during market hours)") if PLACE_ENDPOINT is None else "  Orders: schema wired"
-        rows.append(Text(schema_line, style=YELLOW if PLACE_ENDPOINT is None else GAIN))
-    except Exception:
-        pass
-
-    return _panel(Group(*rows), "◎ TMS LIVE  —  Nepal Stock Exchange", CYAN)
+    """TMS live panel — not available in public release."""
+    return _panel(Text("\n  Live brokerage not available in this release.\n", style=DIM), "◎ TMS LIVE", CYAN)
 
 def _idx_bar(d: MD) -> Text:
     if len(d.nepse) >= 2:
@@ -655,30 +571,8 @@ def _prompt_input(label: str) -> str:
 # ── buy / sell ────────────────────────────────────────────────────────────────
 
 def _tms_dry_submit(side: str, sym: str, qty: int, price: float) -> str:
-    """Route paper trade through TMSOrderClient in dry-run mode.
-
-    Succeeds silently when no TMS session is configured — paper trades still
-    land in paper_portfolio.csv regardless. The dry-run path adds an audit
-    wired, flipping `dry_run=False` is the single switch for live trading.
-    """
-    try:
-            KillSwitchConfig, OrderRequest, OrderRejected, TMSOrderClient,
-        )
-        try:
-        except TMSSessionMissing:
-            return ""
-        oc = TMSOrderClient(rest, KillSwitchConfig(
-            dry_run=True, allow_live=False,
-            max_qty_per_order=100_000, max_notional_npr=1e12,
-        ))
-        req = OrderRequest(side=side, symbol=sym, quantity=qty, price=price,
-                            order_type="LIMIT", validity="DAY", client_ref="tui")
-        oc.place_order(req)
-        return f" (audited: dry-run {side} {qty}x{sym} @ {price:.1f})"
-    except OrderRejected as exc:
-        return f" (TMS dry-run rejected: {exc})"
-    except Exception:
-        return ""
+    """TMS order routing not available in public release."""
+    return ""
 
 
 def exec_buy(sym: str, sh: str, pr: str) -> str:
