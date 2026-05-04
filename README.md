@@ -24,6 +24,12 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 
 ## Architecture
 
+### Paper Agent Workflow
+
+The public agent workflow is evidence-gated, checkpointed, and restricted to paper execution. The implementation in `backend/nepse_agents/` does not include live order routing, credentials, or execution integrations.
+
+![NEPSE Quant Terminal paper agent architecture](docs/assets/nepse-agent-architecture.png)
+
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   Textual TUI                       │
