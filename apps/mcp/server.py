@@ -18,6 +18,7 @@ from backend.agents.runtime_config import (
     load_active_agent_config,
     set_active_agent,
 )
+from backend.nepse_agents import run_paper_decision
 from backend.quant_pro.nepalosint_client import (
     related_stories as nepalosint_related_stories,
     semantic_story_search as nepalosint_semantic_story_search,
@@ -54,6 +55,7 @@ def build_tool_adapters(service: ControlPlaneCommandService) -> Dict[str, Callab
         ),
         "review_trade_candidate": lambda **kwargs: service.review_trade_candidate(**kwargs),
         "submit_paper_order": lambda **kwargs: service.submit_paper_order(**kwargs).to_record(),
+        "run_multi_agent_decision": lambda candidate: run_paper_decision(dict(candidate or {})),
         "halt_trading": lambda level="all", reason="mcp halt": service.halt_trading(level=level, reason=reason).to_record(),
         "resume_trading": lambda: service.resume_trading().to_record(),
         "get_agent_tab_state": lambda: {
@@ -216,6 +218,9 @@ def build_server(
         )
 
     @server.tool()
+    def run_multi_agent_decision(candidate: dict):
+        return adapters["run_multi_agent_decision"](candidate=candidate)
+
     @server.tool()
     def halt_trading(level: str = "all", reason: str = "mcp halt"):
         return adapters["halt_trading"](level=level, reason=reason)
