@@ -6,7 +6,7 @@
   "notes": {
     "launch_server": "./scripts/mcp/run_http_server.sh",
     "default_mode": "paper",
-    "safe_live_mode": "shadow_live",
+    "execution_mode": "paper_only",
     "agent_tab_bridge_tools": [
       "get_agent_tab_state",
       "publish_agent_analysis",

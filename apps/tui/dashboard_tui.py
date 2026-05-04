@@ -462,8 +462,7 @@ def _apply_indicator_history_change(
 
 
 def _display_live_override_enabled() -> bool:
-    raw = str(os.environ.get("NEPSE_TUI_SCREENSHOT_LIVE", "") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    return False
 
 
 def _load_accounts_registry() -> dict:
@@ -2588,7 +2587,7 @@ class ModalDialog(ModalScreen[dict | None]):
 
 
 class ModeSelectScreen(ModalScreen):
-    """Startup screen: arrow-key selection between Paper and Live TMS."""
+    """Startup screen for the paper trading workspace."""
 
     DEFAULT_CSS = """
     ModeSelectScreen {
@@ -3448,8 +3447,8 @@ class NepseDashboard(App):
     active_tab: str = "market"
     lookup_sym: str = ""
     lookup_tf: str = "D"  # D=Daily, W=Weekly, M=Monthly, I=Intraday
-    trade_mode: str = "paper"  # "paper" or "live"
-    tms_service = None   # LocalTMSExecutionService instance for live mode
+    trade_mode: str = "paper"
+    tms_service = None
     _tms_bundle = None   # cached fetch_monitor_bundle result
     _last_tms_watchlist_fetch_at: float = 0.0
     _tms_watchlist_refresh_inflight: bool = False
@@ -3783,10 +3782,7 @@ class NepseDashboard(App):
         if not mode:
             self.exit()
             return
-        self.trade_mode = mode
-        if mode == "live":
-            # Live brokerage not available in public release — treat as paper mode.
-            self.trade_mode = "paper"
+        self.trade_mode = "paper"
         self._init_dashboard()
 
     def _on_tms_credentials(self, result: dict | None) -> None:
@@ -4147,9 +4143,6 @@ class NepseDashboard(App):
         if not approved:
             self._set_status(f"AGENT BLOCKED SELL {result['symbol']}: {reason}")
             return
-        if self.trade_mode == "live":
-            self._submit_tms_order(result, "SELL", reason)
-            return
         holdings = _build_sell_holdings_map(self._stats.get("positions", []) if hasattr(self, "_stats") else [])
         try:
             qty = _resolve_sell_qty(result["symbol"], result["shares"], holdings)
@@ -4167,42 +4160,8 @@ class NepseDashboard(App):
 
     @work(thread=True)
     def _submit_tms_order(self, result: dict, action: str, agent_reason: str) -> None:
-        """Submit order through TMS browser automation."""
-        sym = result["symbol"]
-        shares = result["shares"]
-        price = result.get("price", "")
-
-        if not self.tms_service:
-            self.app.call_from_thread(
-                self._set_status, f"TMS not initialized — cannot submit {action} {sym}")
-            return
-
-        try:
-            control = build_tui_control_plane(self)
-            qty = int(shares) if str(shares).isdigit() else 10
-            px = float(price) if price else None
-            self.app.call_from_thread(
-                self._set_status,
-                f"TMS: Submitting {action} {sym} x{qty}..."
-            )
-            command = control.create_live_intent(
-                action=action.lower(),
-                symbol=sym,
-                quantity=qty,
-                limit_price=px,
-                mode="live",
-                source="owner_manual",
-                reason="tui_agent_order",
-                metadata={"interactive": True, "agent_reason": agent_reason},
-                operator_surface="tui",
-            )
-            status = f"TMS {action} {sym}: {command.message}"
-            status += f"  |  Agent: {agent_reason[:50]}"
-            self.app.call_from_thread(self._set_status, status)
-        except Exception as e:
-            self.app.call_from_thread(
-                self._set_status, f"TMS {action} {sym} failed: {e}"
-            )
+        """Live TMS order submission is disabled in the public paper build."""
+        self.app.call_from_thread(self._set_status, "Only paper trading is supported in this build.")
 
     def _on_lookup(self, result: dict | None) -> None:
         if not result: return
@@ -4506,7 +4465,7 @@ class NepseDashboard(App):
             f"[bold #ffaf00]ORDER MANAGEMENT[/]  │  "
             f"[{GAIN}]Open: {open_count}[/]  │  "
             f"[{CYAN}]Filled today: {filled_today}[/]  │  "
-            f"[#888888]Mode: {'LIVE' if self._display_live_badge() else 'PAPER'}  │  Place orders via the order book[/]"
+            f"[#888888]Mode: PAPER  │  Place orders via the order book[/]"
         ))
 
     def _populate_orders_tab_live(self) -> None:
@@ -4568,7 +4527,7 @@ class NepseDashboard(App):
             f"[{GAIN if session_ok else LOSS}]TMS: {'CONNECTED' if session_ok else 'DISCONNECTED'}[/]  │  "
             f"[{CYAN}]Daily orders: {len(daily_records)}[/]  │  "
             f"[{YELLOW}]Open: {open_count}[/]  │  "
-            f"[#888888]Mode: LIVE TMS[/]"
+            f"[#888888]Mode: PAPER[/]"
         ))
 
     def _on_order_submit(self) -> None:
@@ -4711,29 +4670,8 @@ class NepseDashboard(App):
 
     @work(thread=True)
     def _submit_live_order(self, action: str, sym: str, qty: int, price: float) -> None:
-        """Submit order through TMS in live mode."""
-        if not self.tms_service:
-            self.app.call_from_thread(self._set_status, f"TMS not initialized")
-            return
-        try:
-            control = build_tui_control_plane(self)
-            self.app.call_from_thread(self._set_status, f"TMS: Submitting {action} {sym} x{qty} @ {price:,.1f}...")
-            command = control.create_live_intent(
-                action=action.lower(),
-                symbol=sym,
-                quantity=qty,
-                limit_price=price,
-                mode="live",
-                source="owner_manual",
-                reason="tui_orders_tab",
-                metadata={"interactive": True},
-                operator_surface="tui",
-            )
-            self.app.call_from_thread(self._set_status, f"TMS {action} {sym}: {command.message}")
-            # Refresh orders tab
-            self.app.call_from_thread(self._populate_orders_tab)
-        except Exception as e:
-            self.app.call_from_thread(self._set_status, f"TMS order failed: {e}")
+        """Live TMS order submission is disabled in the public paper build."""
+        self.app.call_from_thread(self._set_status, "Only paper trading is supported in this build.")
 
     def on_unmount(self) -> None:
         """Graceful shutdown — stop trading engine."""
@@ -6509,7 +6447,7 @@ class NepseDashboard(App):
                 msg = self._cancel_all_paper_orders()
                 self._set_status(msg)
             else:
-                self._set_status("Cancel all not supported in live mode from TUI")
+                self._set_status("Cancel all is only available for paper orders")
         elif bid == "profile-btn-browse-seed":
             self._browse_seed_file()
         elif bid == "profile-btn-create-account":
@@ -6743,14 +6681,12 @@ class NepseDashboard(App):
     # ── Header / Index / Status bars ──────────────────────────────────────────
 
     def _display_live_badge(self) -> bool:
-        return bool(self.trade_mode == "live" or _display_live_override_enabled())
+        return False
 
     def _display_mode_label(self) -> str:
-        return "LIVE" if self._display_live_badge() else "PAPER AUTO"
+        return "PAPER AUTO"
 
     def _display_nav_mode_tag(self) -> str:
-        if self._display_live_badge():
-            return "[bold #ff8800]LIVE[/]"
         if self._trading_engine:
             phase = self._trading_engine.phase.upper().replace("_", " ")
             return f"[bold #00cfff]AUTO[/] [dim]{phase}[/]"
@@ -6759,10 +6695,7 @@ class NepseDashboard(App):
     def _update_header(self):
         parts = []
         # Mode indicator
-        if self._display_live_badge():
-            parts.append("[bold #111820 on #f2b94b] LIVE [/]")
-        else:
-            parts.append("[bold #111820 on #79ffb3] PAPER AUTO [/]")
+        parts.append("[bold #111820 on #79ffb3] PAPER AUTO [/]")
         for name, key in TAB_NAMES.items():
             label = TAB_LABELS.get(name, name.upper())
             if name == self.active_tab:
@@ -6938,7 +6871,7 @@ class NepseDashboard(App):
             # Fetch TMS bundle once, cache for _populate_trades_full
             if self.tms_service:
                 try:
-                    self._set_status("Mode: LIVE TMS  |  Scraping TMS pages...")
+                    self._set_status("TMS monitor  |  Scraping TMS pages...")
                     live_bundle = self.tms_service.executor.fetch_monitor_bundle()
                     self._tms_bundle = _merge_tms_bundle_with_cache(live_bundle)
                     h = self._tms_bundle.get("holdings", {})
@@ -6947,7 +6880,7 @@ class NepseDashboard(App):
                     login_req = _tms_health_flag(health, "login_required")
                     status_note = "using cached snapshots" if login_req else "live snapshots"
                     self._set_status(
-                        f"Mode: LIVE TMS  |  Bundle: {len(items)} holdings, "
+                        f"TMS monitor  |  Bundle: {len(items)} holdings, "
                         f"login_required={login_req}  |  {status_note}"
                     )
                 except Exception as e:
@@ -7653,7 +7586,7 @@ class NepseDashboard(App):
             (str(account.get("name") or selected_id) for account in getattr(self, "_paper_accounts", []) if str(account.get("id") or "") == selected_id),
             selected_id,
         )
-        mode_note = "Creating or activating an account swaps the full paper runtime" if self.trade_mode == "paper" else "Paper account controls are idle while live mode is selected"
+        mode_note = "Creating or activating an account swaps the full paper runtime"
         summary = Text.from_markup(
             f"[bold {WHITE}]Active[/] {current_name}   "
             f"[bold {WHITE}]Strategy[/] {current_strategy}   "
@@ -8993,7 +8926,7 @@ class NepseDashboard(App):
             if "Date" in tl.columns:
                 tl = tl.sort_values("Date").reset_index(drop=True)
         else:
-            tl = pd.DataFrame()
+            tl = _load_trade_log()
         if not tl.empty:
             for _, r in tl.iloc[::-1].iterrows():
                 action = str(r.get("Action", ""))
@@ -9572,7 +9505,7 @@ class NepseDashboard(App):
 
     @work(thread=True)
     def _watchlist_add_live(self, sym: str) -> None:
-        self.app.call_from_thread(self._set_status, f"Mode: LIVE TMS  |  Adding {sym} to broker watchlist...")
+        self.app.call_from_thread(self._set_status, f"TMS monitor  |  Adding {sym} to broker watchlist...")
         try:
             result = build_tui_control_plane(self).sync_watchlist(action="add", symbol=sym)
             snapshot = dict(result.payload or {})
@@ -9584,7 +9517,7 @@ class NepseDashboard(App):
 
     @work(thread=True)
     def _watchlist_remove_live(self, sym: str) -> None:
-        self.app.call_from_thread(self._set_status, f"Mode: LIVE TMS  |  Removing {sym} from broker watchlist...")
+        self.app.call_from_thread(self._set_status, f"TMS monitor  |  Removing {sym} from broker watchlist...")
         try:
             result = build_tui_control_plane(self).sync_watchlist(action="remove", symbol=sym)
             snapshot = dict(result.payload or {})
@@ -9605,7 +9538,7 @@ class NepseDashboard(App):
             return
         self._tms_watchlist_refresh_inflight = True
         try:
-            self.app.call_from_thread(self._set_status, "Mode: LIVE TMS  |  Syncing broker watchlist...")
+            self.app.call_from_thread(self._set_status, "TMS monitor  |  Syncing broker watchlist...")
             result = build_tui_control_plane(self).sync_watchlist(action="fetch")
             snapshot = dict(result.payload or {})
             self._last_tms_watchlist_fetch_at = time.monotonic()
@@ -9614,7 +9547,7 @@ class NepseDashboard(App):
             symbols = snapshot.get("symbols") or []
             self.app.call_from_thread(
                 self._set_status,
-                f"Mode: LIVE TMS  |  Broker watchlist synced ({len(symbols)} symbols)",
+                f"TMS monitor  |  Broker watchlist synced ({len(symbols)} symbols)",
             )
         except Exception as e:
             self._last_tms_watchlist_fetch_at = time.monotonic()

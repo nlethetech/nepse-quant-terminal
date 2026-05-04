@@ -12,8 +12,10 @@ def test_active_agent_config_defaults_when_missing(tmp_path, monkeypatch):
 
     cfg = load_active_agent_config()
 
-    assert cfg["backend"] == "gemma4_mlx"
-    assert cfg["provider_label"] == "gemma4_mlx"
+    assert cfg["selected_preset"] == "ollama"
+    assert cfg["backend"] == "ollama"
+    assert cfg["provider_label"] == "ollama"
+    assert cfg["model"] == "llama3"
 
 
 def test_set_active_agent_persists_selected_backend(tmp_path, monkeypatch):

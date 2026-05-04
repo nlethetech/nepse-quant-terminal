@@ -16,6 +16,11 @@ from backend.trading.live_trader import (
 )
 
 
+def list_executed_trade_events(limit: int = 8) -> List[Dict[str, Any]]:
+    """Return executed live events when private TMS audit storage is available."""
+    return []
+
+
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None:

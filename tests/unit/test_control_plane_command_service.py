@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from backend.quant_pro.control_plane.command_service import ControlPlaneCommandService
-from backend.quant_pro.control_plane.decision_journal import load_approval_request
 from backend.quant_pro.control_plane.models import TradingMode
 
 
@@ -126,7 +125,7 @@ def test_submit_paper_order_uses_trader_execution(monkeypatch):
     assert "NABIL" in trader.positions
 
 
-def test_shadow_live_records_approval_request(monkeypatch, tmp_path):
+def test_shadow_live_intent_is_rejected_in_paper_only_build(monkeypatch, tmp_path):
     monkeypatch.setenv("NEPSE_LIVE_AUDIT_DB_FILE", str(tmp_path / "audit.db"))
     monkeypatch.setattr("backend.quant_pro.control_plane.command_service.fetch_latest_ltp", lambda symbol: 500.0)
     monkeypatch.setattr("backend.quant_pro.control_plane.command_service.count_intents_for_day", lambda day: 0)
@@ -148,16 +147,13 @@ def test_shadow_live_records_approval_request(monkeypatch, tmp_path):
         reason="shadow_test",
     )
 
-    assert result.ok is True
-    assert result.status == "pending_confirmation"
-    assert result.intent_id is not None
-    assert load_execution_intent(result.intent_id) is not None
-    approval = load_approval_request(result.intent_id)
-    assert approval is not None
-    assert approval.status.value == "pending"
+    assert result.ok is False
+    assert result.status == "unsupported"
+    assert result.intent_id is None
+    assert result.message == "Only paper trading is supported in this build"
 
 
-def test_live_confirm_routes_through_execution_service(monkeypatch, tmp_path):
+def test_live_confirm_is_rejected_in_paper_only_build(monkeypatch, tmp_path):
     monkeypatch.setenv("NEPSE_LIVE_AUDIT_DB_FILE", str(tmp_path / "audit.db"))
     monkeypatch.setattr("backend.quant_pro.control_plane.command_service.fetch_latest_ltp", lambda symbol: 500.0)
     monkeypatch.setattr("backend.quant_pro.control_plane.command_service.count_intents_for_day", lambda day: 0)
@@ -183,6 +179,7 @@ def test_live_confirm_routes_through_execution_service(monkeypatch, tmp_path):
 
     confirmed = service.confirm_live_intent(created.intent_id or "", mode="live")
 
-    assert confirmed.ok is True
-    assert trader.live_execution_service.confirmed == [created.intent_id]
-    assert confirmed.payload["result"]["status"] == ExecutionStatus.SUBMITTED_PENDING
+    assert created.ok is False
+    assert confirmed.ok is False
+    assert confirmed.status == "unsupported"
+    assert trader.live_execution_service.confirmed == []

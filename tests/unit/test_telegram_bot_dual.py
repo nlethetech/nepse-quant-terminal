@@ -11,6 +11,7 @@ import pandas as pd
 import backend.quant_pro.telegram_alerts as alerts
 import backend.quant_pro.telegram_bot as bot
 import backend.quant_pro.reporting as reporting
+from backend.quant_pro.tms_models import ExecutionAction, ExecutionIntent, ExecutionSource, ExecutionStatus
 
 
 class DummyLock:
@@ -74,7 +75,7 @@ def _dummy_live_trader():
     trader = _dummy_trader()
     trader.live_execution_enabled = True
     trader.create_live_owner_buy_intent = lambda symbol, shares, limit_price: (True, "pending_confirmation", intent)
-    trader._format_live_receipt_html = lambda live_intent, result=None: f"<b>LIVE EXECUTION</b>\n<code>{live_intent.symbol}</code>"
+    trader._format_live_receipt_html = lambda live_intent, result=None: f"<b>DISABLED</b>\n<code>{live_intent.symbol}</code>"
     return trader, intent
 
 
@@ -208,7 +209,7 @@ def test_owner_application_registers_private_handlers():
     callback_patterns = [getattr(handler, "pattern", None) for handler in handlers if handler.__class__.__name__ == "CallbackQueryHandler"]
 
     assert any(getattr(pattern, "pattern", "") == "^buy_(confirm|cancel)$" for pattern in callback_patterns if pattern is not None)
-    assert any(getattr(pattern, "pattern", "") == "^live_(confirm|cancel)_.+$" for pattern in callback_patterns if pattern is not None)
+    assert not any(getattr(pattern, "pattern", "").startswith("^live_") for pattern in callback_patterns if pattern is not None)
 
 
 def test_viewer_report_respects_privacy_toggles(monkeypatch):
@@ -512,14 +513,13 @@ def test_viewer_report_prefers_live_executed_trades(monkeypatch):
     assert report["portfolio"]["recent_trades"][0]["symbol"] == "LIVE"
 
 
-def test_live_buy_entry_returns_confirmation_preview(monkeypatch):
+def test_live_buy_entry_is_disabled(monkeypatch):
     trader, intent = _dummy_live_trader()
     target = DummyTarget()
     update = SimpleNamespace(message=target)
     context = SimpleNamespace(args=["NABIL", "10", "500"], user_data={}, application=None)
 
     bot._trader = trader
-    monkeypatch.setattr(bot, "load_execution_intent", lambda intent_id: intent)
 
     result = asyncio.run(bot.buy_entry.__wrapped__(update, context))
 
@@ -527,8 +527,8 @@ def test_live_buy_entry_returns_confirmation_preview(monkeypatch):
     assert target.messages
     kind, text, kwargs = target.messages[0]
     assert kind == "text"
-    assert "LIVE EXECUTION" in text
-    assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data.startswith("live_confirm_")
+    assert "Only paper trading is supported" in text
+    assert "reply_markup" not in kwargs
 
 
 def test_start_bot_threads_only_starts_configured_roles(monkeypatch):
