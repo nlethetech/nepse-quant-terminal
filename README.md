@@ -14,7 +14,7 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 - **Market Dashboard** — live quotes, 52-week highs/lows, top movers, sector heatmap, volume signals.
 - **Portfolio Analytics** — unrealized/realized P&L, sector concentration, holding age buckets, max drawdown, alpha vs. NEPSE benchmark.
 - **Gold Hedge Overlay** — tracks gold/silver regime (risk-on / neutral / risk-off) and adjusts capital deployment accordingly.
-- **AI Agent** — on-demand analysis of your portfolio positions and signal shortlist. Runs locally via Ollama (any model), Gemma 4 MLX (Apple Silicon), or Claude CLI.
+- **AI Agent** — on-demand analysis of your portfolio positions and signal shortlist. Defaults to a local Ollama model, with Gemma 4 MLX or Claude CLI available as optional backends.
 - **Strategy Builder** — create, backtest, and assign custom strategies. Each account runs its own strategy independently.
 - **Statistical Validation** — walk-forward OOS testing, Monte Carlo, CSCV/PBO overfitting detection, deflated Sharpe ratio, random baseline percentile.
 - **MeroShare Import** — seed any account directly from your MeroShare "My Shares Values.csv" export.
@@ -57,7 +57,7 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 | Market Data | `backend/market/` | Price DB queries, quote scraping, 52wk calculations |
 | Validation | `validation/` | Walk-forward, Monte Carlo, CSCV, DSR, random baseline |
 | Gold Hedge | `backend/quant_pro/gold_hedge.py` | Gold/silver regime detection → capital deployment % |
-| AI Agent | `backend/agents/agent_analyst.py` | Claude-powered portfolio and signal analysis |
+| AI Agent | `backend/agents/agent_analyst.py` | Ollama-first portfolio and signal analysis |
 | NEPSE Calendar | `nepse_calendar.py` | Sun–Thu trading days, public holidays, trading day counter |
 
 ---
@@ -247,7 +247,7 @@ python -m apps.tui.dashboard_tui
 
 ## AI Agent Setup
 
-The Agents tab provides on-demand equity analysis of your signal shortlist and portfolio. Three backends are supported — pick whichever suits your hardware.
+The Agents tab provides on-demand equity analysis of your signal shortlist and portfolio. Ollama is the default backend; Gemma 4 MLX and Claude CLI are optional.
 
 ### Option 1 — Ollama (recommended, any hardware)
 
@@ -280,9 +280,20 @@ ollama serve
 # Runs at http://localhost:11434 by default
 ```
 
-**Step 4 — Point the terminal at your model**
+**Step 4 — Optional: change the default model**
 
-Edit `data/runtime/agents/active_agent.json` (created automatically on first run):
+The terminal defaults to:
+
+```json
+{
+  "selected_preset": "ollama",
+  "backend": "ollama",
+  "model": "llama3",
+  "ollama_host": "http://localhost:11434"
+}
+```
+
+To use a different Ollama model, edit `data/runtime/agents/active_agent.json` after first run:
 ```json
 {
   "selected_preset": "ollama",
@@ -292,7 +303,7 @@ Edit `data/runtime/agents/active_agent.json` (created automatically on first run
 }
 ```
 
-Or switch from inside the TUI: **Agents tab → Agent Settings → select Ollama → enter model name**.
+Or switch from inside the TUI: **Agents tab → Agent Settings → enter model name**.
 
 **Step 5 — Run the terminal**
 ```bash
@@ -312,13 +323,13 @@ pip install mlx-vlm
 # Model (~3 GB) downloads automatically on first use
 ```
 
-The default model is `mlx-community/gemma-4-e4b-it-4bit`. No config change needed — this is the default backend.
+To use this backend, select the `gemma4_mlx` preset in the Agents tab or in `data/runtime/agents/active_agent.json`.
 
 ---
 
 ### Option 3 — Claude CLI
 
-Falls back to the `claude` CLI if Gemma or Ollama fails, or set it as primary.
+Claude is optional and never used as the default fallback.
 
 ```bash
 # Install Claude Code CLI

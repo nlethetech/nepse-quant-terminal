@@ -1,4 +1,4 @@
-"""Decision journal persisted in the live audit database."""
+"""Decision journal persisted in the local control-plane audit database."""
 
 from __future__ import annotations
 
@@ -14,12 +14,69 @@ from .models import AgentDecision, ApprovalRequest, ApprovalStatus, PolicyVerdic
 
 def _connect() -> sqlite3.Connection:
     init_live_audit_db()
-    conn = sqlite3.connect(str(get_live_audit_db_path()), timeout=60)
+    db_path = get_live_audit_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), timeout=60)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=60000")
+    _ensure_tables(conn)
     return conn
+
+
+def _ensure_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_decisions (
+            decision_id TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            action TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            limit_price REAL,
+            confidence REAL NOT NULL,
+            horizon TEXT,
+            thesis TEXT,
+            catalysts_json TEXT,
+            risk_json TEXT,
+            source_signals_json TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS policy_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            decision_id TEXT,
+            symbol TEXT NOT NULL,
+            action TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            policy_decision TEXT NOT NULL,
+            requires_approval INTEGER NOT NULL,
+            reasons_json TEXT,
+            machine_reasons_json TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS approval_requests (
+            intent_id TEXT PRIMARY KEY,
+            decision_id TEXT,
+            status TEXT NOT NULL,
+            operator_surface TEXT,
+            summary TEXT,
+            expires_at TEXT,
+            requested_at TEXT,
+            metadata_json TEXT
+        )
+        """
+    )
+    conn.commit()
 
 
 def _dump(value: Any) -> str:

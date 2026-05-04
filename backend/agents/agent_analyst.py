@@ -1,9 +1,9 @@
 """
 NEPSE Agent Analyst — local-first equity research overlay.
 
-Uses a local Gemma 4 model on MLX as the primary agent, with optional Claude
-fallback, to perform structured bull/bear analysis on algorithmic shortlists,
-cross-referencing OSINT intelligence, quarterly financials, and market regime.
+Uses local Ollama by default, with optional Gemma 4 MLX or Claude backends, to
+perform structured bull/bear analysis on algorithmic shortlists, cross-referencing
+OSINT intelligence, quarterly financials, and market regime.
 
 Two modes:
   1. analyze() — batch analysis of shortlisted stocks (one agent call)
@@ -28,6 +28,7 @@ import pandas as pd
 from configs.long_term import LONG_TERM_CONFIG
 from backend.agents.runtime_config import (
     DEFAULT_GEMMA4_MODEL as RUNTIME_DEFAULT_GEMMA4_MODEL,
+    DEFAULT_OLLAMA_MODEL as RUNTIME_DEFAULT_OLLAMA_MODEL,
     EXPERIMENTAL_GEMMA4_MODEL as RUNTIME_EXPERIMENTAL_GEMMA4_MODEL,
     load_active_agent_config,
 )
@@ -67,9 +68,10 @@ SUPER_SIGNAL_MIN_STRENGTH = 1.0
 SUPER_SIGNAL_MIN_CONFIDENCE = 0.75
 SUPER_SIGNAL_MIN_CONVICTION = 0.9
 ANALYSIS_CACHE_MAX_AGE_SECS = 900
-DEFAULT_AGENT_BACKEND = "gemma4_mlx"
+DEFAULT_AGENT_BACKEND = "ollama"
 DEFAULT_GEMMA4_MLX_MODEL = RUNTIME_DEFAULT_GEMMA4_MODEL
 DEFAULT_GEMMA4_EXPERIMENTAL_MODEL = RUNTIME_EXPERIMENTAL_GEMMA4_MODEL
+DEFAULT_OLLAMA_MODEL = RUNTIME_DEFAULT_OLLAMA_MODEL
 DEFAULT_AGENT_MAX_TOKENS = 4000
 DEFAULT_AGENT_CHAT_MAX_TOKENS = 320
 DEFAULT_AGENT_TEMPERATURE = 0.15
@@ -188,7 +190,9 @@ def _agent_model_id() -> str:
     if env_value:
         return env_value
     cfg = load_active_agent_config()
-    return str(cfg.get("model") or DEFAULT_GEMMA4_MLX_MODEL).strip()
+    backend = str(cfg.get("backend") or DEFAULT_AGENT_BACKEND).strip().lower()
+    fallback = DEFAULT_OLLAMA_MODEL if backend == "ollama" else DEFAULT_GEMMA4_MLX_MODEL
+    return str(cfg.get("model") or fallback).strip()
 
 
 def _agent_provider_label() -> str:
@@ -222,7 +226,7 @@ def _agent_fallback_backend() -> str:
     if env_value:
         return env_value
     cfg = load_active_agent_config()
-    return str(cfg.get("fallback_backend") or "claude").strip().lower()
+    return str(cfg.get("fallback_backend") or "").strip().lower()
 
 
 def reload_agent_runtime() -> dict:
@@ -327,7 +331,7 @@ def _call_ollama(prompt: str, system: str = SYSTEM_PROMPT, max_tokens: int = DEF
     try:
         import urllib.request, json as _json
         cfg = load_active_agent_config()
-        model = str(cfg.get("model") or "llama3").strip()
+        model = str(cfg.get("model") or DEFAULT_OLLAMA_MODEL).strip()
         host = str(cfg.get("ollama_host") or "http://localhost:11434").rstrip("/")
         payload = _json.dumps({
             "model": model,
@@ -851,7 +855,8 @@ def _analysis_cache_is_fresh(analysis: dict | None) -> bool:
         for row in list(payload.get("stocks") or [])
         if isinstance(row, dict)
     }
-    if not (verdicts & {"APPROVE", "HOLD", "REJECT"}):
+    verdicts.discard("")
+    if verdicts and not (verdicts & {"APPROVE", "HOLD", "REJECT"}):
         return False
     age = time.time() - float(payload.get("timestamp") or 0.0)
     if age > ANALYSIS_CACHE_MAX_AGE_SECS:
@@ -861,8 +866,10 @@ def _analysis_cache_is_fresh(analysis: dict | None) -> bool:
     active_account = _active_account_context()
     if str(payload.get("account_id") or "") != str(active_account.get("id") or "account_1"):
         return False
-    active_strategy = _active_strategy_context()
-    return str(payload.get("strategy_id") or "") == str(active_strategy.get("id") or "")
+    if payload.get("strategy_id") is not None:
+        active_strategy = _active_strategy_context()
+        return str(payload.get("strategy_id") or "") == str(active_strategy.get("id") or "")
+    return True
 
 
 def _clip_text(value: object, limit: int = 140) -> str:

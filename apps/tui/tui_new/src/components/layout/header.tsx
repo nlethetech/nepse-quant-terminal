@@ -2,17 +2,15 @@
 // Deep blue background, white text, 1 row
 
 import { TextAttributes } from "@opentui/core";
-import { useAppState } from "../../state/app-context";
 import { useMarketIndices } from "../../data/hooks";
 import * as colors from "../../theme/colors";
 import { fmtPrice, fmtChg, fmtVol, fmtTime, chgColor } from "../ui/helpers";
 
 export function Header() {
-  const { tradingMode } = useAppState();
   const { data: indices } = useMarketIndices();
 
-  const modeLabel = tradingMode === "paper" ? " PAPER " : " LIVE ";
-  const modeFg = tradingMode === "paper" ? colors.positive : colors.negative;
+  const modeLabel = " PAPER ";
+  const modeFg = colors.positive;
   const now = fmtTime();
 
   return (

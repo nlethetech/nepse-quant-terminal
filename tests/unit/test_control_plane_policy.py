@@ -21,7 +21,7 @@ def test_paper_buy_denied_for_duplicate_holding():
     assert verdict.machine_reasons[0]["code"] == "duplicate_holding"
 
 
-def test_live_buy_requires_owner_approval_by_default():
+def test_live_buy_denied_in_paper_only_build():
     engine = PolicyEngine()
     verdict = engine.evaluate(
         PolicyContext(
@@ -40,15 +40,16 @@ def test_live_buy_requires_owner_approval_by_default():
         )
     )
 
-    assert verdict.decision == PolicyDecision.REQUIRE_APPROVAL
-    assert verdict.requires_approval is True
+    assert verdict.decision == PolicyDecision.DENY
+    assert verdict.requires_approval is False
+    assert verdict.machine_reasons[0]["code"] == "paper_only"
 
 
-def test_live_buy_denied_when_market_closed():
+def test_shadow_live_buy_denied_in_paper_only_build():
     engine = PolicyEngine()
     verdict = engine.evaluate(
         PolicyContext(
-            mode=TradingMode.LIVE,
+            mode=TradingMode.SHADOW_LIVE,
             action="buy",
             symbol="NABIL",
             quantity=10,
@@ -60,10 +61,10 @@ def test_live_buy_denied_when_market_closed():
     )
 
     assert verdict.decision == PolicyDecision.DENY
-    assert verdict.machine_reasons[0]["code"] == "market_closed"
+    assert verdict.machine_reasons[0]["code"] == "paper_only"
 
 
-def test_live_buy_denied_on_price_deviation():
+def test_live_price_checks_are_not_reached_in_paper_only_build():
     engine = PolicyEngine()
     verdict = engine.evaluate(
         PolicyContext(
@@ -81,4 +82,4 @@ def test_live_buy_denied_on_price_deviation():
     )
 
     assert verdict.decision == PolicyDecision.DENY
-    assert verdict.machine_reasons[0]["code"] == "price_band"
+    assert verdict.machine_reasons[0]["code"] == "paper_only"

@@ -2354,13 +2354,15 @@ class LiveTrader:
             self.strategy_config.get("regime_sector_limits") or {"bull": 0.50, "neutral": 0.35, "bear": 0.25}
         )
         self.sector_limit = float(self.strategy_config.get("sector_limit") or self.regime_sector_limits.get("neutral", 0.35))
-        self.execution_mode = str(getattr(args, "mode", "paper") or "paper").strip().lower()
+        requested_execution_mode = str(getattr(args, "mode", "paper") or "paper").strip().lower()
+        self.execution_mode = "paper"
         self.live_settings.mode = self.execution_mode
-        self.live_settings.enabled = self.execution_mode in {"live", "dual", "shadow_live"} or self.live_settings.enabled
-        self.live_execution_enabled = bool(self.live_settings.enabled and self.execution_mode in {"live", "dual"})
-        self.dual_execution_mode = self.execution_mode == "dual"
-        self.shadow_live_mode = self.execution_mode == "shadow_live"
-        self.tms_monitor_enabled = _env_flag("NEPSE_TMS_MONITOR_ENABLED", True)
+        self.live_settings.enabled = False
+        self.live_execution_enabled = False
+        self.dual_execution_mode = False
+        self.shadow_live_mode = False
+        self.requested_execution_mode = requested_execution_mode
+        self.tms_monitor_enabled = False
         self.tms_monitor_interval_secs = max(60, _env_int("NEPSE_TMS_MONITOR_INTERVAL_SECS", 300))
         self.tms_monitor_market_hours_only = _env_flag("NEPSE_TMS_MONITOR_MARKET_HOURS_ONLY", True)
         self.tms_browser: Optional[TMSBrowserExecutor] = None
@@ -2908,77 +2910,19 @@ class LiveTrader:
         return format_live_order_summary_html(intent, result=result)
 
     def create_live_owner_buy_intent(self, symbol: str, shares: int, limit_price: float) -> Tuple[bool, str, Optional[ExecutionIntent]]:
-        result = self.get_control_plane().create_live_intent(
-            action=str(ExecutionAction.BUY),
-            symbol=str(symbol).upper(),
-            quantity=int(shares),
-            limit_price=float(limit_price),
-            mode=self.execution_mode,
-            source=str(ExecutionSource.OWNER_MANUAL),
-            reason="owner_manual_buy",
-            metadata={"interactive": True},
-            operator_surface="owner_manual",
-        )
-        intent = load_execution_intent(result.intent_id) if result.intent_id else None
-        return result.ok, result.message, intent
+        return False, "Only paper trading is supported in this build", None
 
     def create_live_owner_sell_intent(self, symbol: str, shares: int, limit_price: float) -> Tuple[bool, str, Optional[ExecutionIntent]]:
-        result = self.get_control_plane().create_live_intent(
-            action=str(ExecutionAction.SELL),
-            symbol=str(symbol).upper(),
-            quantity=int(shares),
-            limit_price=float(limit_price),
-            mode=self.execution_mode,
-            source=str(ExecutionSource.OWNER_MANUAL),
-            reason="owner_manual_sell",
-            metadata={"interactive": True},
-            operator_surface="owner_manual",
-        )
-        intent = load_execution_intent(result.intent_id) if result.intent_id else None
-        return result.ok, result.message, intent
+        return False, "Only paper trading is supported in this build", None
 
     def create_live_owner_cancel_intent(self, order_ref: str) -> Tuple[bool, str, Optional[ExecutionIntent]]:
-        result = self.get_control_plane().create_live_intent(
-            action=str(ExecutionAction.CANCEL),
-            symbol="ORDER",
-            quantity=0,
-            limit_price=None,
-            target_order_ref=str(order_ref),
-            mode=self.execution_mode,
-            source=str(ExecutionSource.OWNER_MANUAL),
-            reason="owner_manual_cancel",
-            metadata={"interactive": True},
-            operator_surface="owner_manual",
-        )
-        intent = load_execution_intent(result.intent_id) if result.intent_id else None
-        return result.ok, result.message, intent
+        return False, "Only paper trading is supported in this build", None
 
     def create_live_owner_modify_intent(self, order_ref: str, limit_price: float, quantity: Optional[int] = None) -> Tuple[bool, str, Optional[ExecutionIntent]]:
-        result = self.get_control_plane().create_live_intent(
-            action=str(ExecutionAction.MODIFY),
-            symbol="ORDER",
-            quantity=int(quantity or 0),
-            limit_price=float(limit_price),
-            target_order_ref=str(order_ref),
-            mode=self.execution_mode,
-            source=str(ExecutionSource.OWNER_MANUAL),
-            reason="owner_manual_modify",
-            metadata={"interactive": True},
-            operator_surface="owner_manual",
-        )
-        intent = load_execution_intent(result.intent_id) if result.intent_id else None
-        return result.ok, result.message, intent
+        return False, "Only paper trading is supported in this build", None
 
     def confirm_live_intent(self, intent_id: str, *, timeout: float = 90.0) -> Tuple[Optional[ExecutionIntent], Optional[ExecutionResult]]:
-        if self.execution_mode == "shadow_live":
-            result = self.get_control_plane().confirm_live_intent(intent_id, mode="shadow_live")
-            return load_execution_intent(intent_id), None if not result.ok else None
-        if self.live_execution_service is None:
-            return None, None
-        result = self.get_control_plane().confirm_live_intent(intent_id, mode=self.execution_mode)
-        payload = dict(result.payload or {})
-        live_result = payload.get("result")
-        return load_execution_intent(intent_id), ExecutionResult(**live_result) if isinstance(live_result, dict) else None
+        return None, None
 
     def list_live_orders(self, limit: int = 10) -> List[Dict[str, Any]]:
         return load_latest_live_orders(limit=limit)
@@ -2987,10 +2931,7 @@ class LiveTrader:
         return load_latest_live_positions(limit=limit)
 
     def reconcile_live_orders(self) -> Dict[str, Any]:
-        if self.live_execution_service is None:
-            return {"enabled": False, "detail": "Live execution disabled"}
-        result = self.get_control_plane().reconcile_live_state()
-        return dict(result.payload or {})
+        return {"enabled": False, "detail": "Only paper trading is supported in this build"}
 
     def _open_owned_paper_orders(self, *, action: Optional[str] = None) -> List[Dict[str, Any]]:
         action_filter = str(action or "").strip().upper()
@@ -3593,7 +3534,8 @@ class LiveTrader:
                         p.market_value for s, p in self.positions.items()
                         if get_symbol_sector(s) == sym_sector
                     )
-                    if nav > 0 and (sector_value + shares * ltp) / nav > self.sector_limit:
+                    sector_limit = float(getattr(self, "sector_limit", 0.35) or 0.35)
+                    if nav > 0 and (sector_value + shares * ltp) / nav > sector_limit:
                         self._log_activity(f"Skip {sym}: sector limit reached")
                         continue
 
@@ -3724,12 +3666,17 @@ class LiveTrader:
         """Check risk exits and execute sells."""
         live_exits: List[Dict[str, Any]] = []
         with self._state_lock:
-            exits = check_exits(
-                self.positions,
-                self.holding_days,
-                self.stop_loss_pct,
-                self.trailing_stop_pct,
-            )
+            stop_loss_pct = float(getattr(self, "stop_loss_pct", HARD_STOP_LOSS_PCT) or HARD_STOP_LOSS_PCT)
+            trailing_stop_pct = float(getattr(self, "trailing_stop_pct", TRAILING_STOP_PCT) or TRAILING_STOP_PCT)
+            try:
+                exits = check_exits(
+                    self.positions,
+                    self.holding_days,
+                    stop_loss_pct,
+                    trailing_stop_pct,
+                )
+            except TypeError:
+                exits = check_exits(self.positions, self.holding_days)
             has_open_owned_order = getattr(self, "_has_open_owned_paper_order", None)
 
             for sym, reason in exits:
@@ -4537,8 +4484,8 @@ def parse_args() -> argparse.Namespace:
         help="Saved strategy id from the strategy registry to apply to this trader",
     )
     parser.add_argument(
-        "--mode", type=str, default="paper", choices=("paper", "live", "dual"),
-        help="Execution mode: paper, live, or dual (default: paper)",
+        "--mode", type=str, default="paper", choices=("paper",),
+        help="Execution mode: paper only",
     )
     return parser.parse_args()
 

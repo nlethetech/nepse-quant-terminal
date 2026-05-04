@@ -27,12 +27,6 @@ make mcp-stdio
 make mcp-http
 ```
 
-Shadow-live HTTP:
-
-```bash
-make mcp-shadow
-```
-
 Default HTTP endpoint:
 
 ```text
@@ -43,14 +37,8 @@ http://127.0.0.1:8765/mcp
 
 - `paper` mode by default
 - `NEPSE_MCP_DRY_RUN=true` by default
-- Use `shadow_live` before `live`
-- Keep `NEPSE_LIVE_OWNER_CONFIRM_REQUIRED=true` for broker-connected modes
+- Live and shadow-live tools are not exposed in this public paper-trading build.
 
 ## Secrets
 
-Do not store broker credentials in workspace plaintext files.
-
-Use either:
-
-- `NEPSE_TMS_USERNAME` and `NEPSE_TMS_PASSWORD`
-- `NEPSE_TMS_SECRET_FILE=/absolute/path/to/tms.env`
+No broker credentials are required. The MCP server only exposes paper-trading and analysis tools.

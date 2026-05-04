@@ -39,6 +39,11 @@ class PolicyEngine:
         reasons = []
         machine = []
         action = str(ctx.action or "").lower()
+        supported_actions = {str(item.value).lower() for item in ExecutionAction}
+        buy_action = str(ExecutionAction.BUY.value).lower()
+        sell_action = str(ExecutionAction.SELL.value).lower()
+        modify_action = str(getattr(ExecutionAction, "MODIFY", "")).lower()
+        cancel_action = str(getattr(ExecutionAction, "CANCEL", "")).lower()
         symbol = str(ctx.symbol or "").upper()
         qty = int(ctx.quantity or 0)
         price = float(ctx.limit_price or 0.0) if ctx.limit_price is not None else None
@@ -59,20 +64,27 @@ class PolicyEngine:
                 approved_mode=ctx.mode,
             )
 
-        if action not in {str(item) for item in ExecutionAction}:
+        if action not in supported_actions:
             return deny("invalid_action", f"Unsupported action: {ctx.action}")
 
-        if action in {str(ExecutionAction.BUY), str(ExecutionAction.SELL)} and qty <= 0:
+        if action in {buy_action, sell_action} and qty <= 0:
             return deny("invalid_qty", "Quantity must be positive")
-        if action == str(ExecutionAction.MODIFY) and qty < 0:
+        if modify_action and action == modify_action and qty < 0:
             return deny("invalid_qty", "Quantity cannot be negative")
-        if action in {str(ExecutionAction.BUY), str(ExecutionAction.SELL), str(ExecutionAction.MODIFY)} and (price is None or price <= 0):
+        price_required_actions = {buy_action, sell_action}
+        if modify_action:
+            price_required_actions.add(modify_action)
+        if action in price_required_actions and (price is None or price <= 0):
             return deny("invalid_price", "Explicit positive limit price required")
-        if action in {str(ExecutionAction.CANCEL), str(ExecutionAction.MODIFY)} and not ctx.target_order_ref:
+        order_ref_actions = {item for item in {cancel_action, modify_action} if item}
+        if action in order_ref_actions and not ctx.target_order_ref:
             return deny("missing_order_ref", "Target order reference required")
 
+        if ctx.mode != TradingMode.PAPER:
+            return deny("paper_only", "Only paper trading is supported in this build")
+
         if ctx.mode == TradingMode.PAPER:
-            if action == str(ExecutionAction.BUY):
+            if action == buy_action:
                 if symbol in positions:
                     return deny("duplicate_holding", f"Already holding {symbol}")
                 if max_positions and open_positions >= max_positions:
@@ -80,7 +92,7 @@ class PolicyEngine:
                 notional = float(price or 0.0) * qty
                 if cash and notional > cash:
                     return deny("cash", "Insufficient cash")
-            elif action == str(ExecutionAction.SELL):
+            elif action == sell_action:
                 held = positions.get(symbol)
                 if held is None:
                     return deny("missing_position", f"No position in {symbol}")
@@ -94,55 +106,7 @@ class PolicyEngine:
                 approved_mode=TradingMode.PAPER,
             )
 
-        if not ctx.live_enabled:
-            return deny("live_disabled", "Live execution is disabled")
-        if action != str(ExecutionAction.CANCEL) and not ctx.market_open:
-            return deny("market_closed", "Market is closed")
-        if ctx.max_daily_orders is not None and ctx.max_daily_orders > 0 and ctx.intents_today >= ctx.max_daily_orders:
-            return deny("daily_cap", "Daily live order cap reached")
-        if ctx.duplicate_open_intent and action in {str(ExecutionAction.BUY), str(ExecutionAction.SELL)}:
-            return deny("cooldown", f"Recent open live intent exists for {symbol}")
-        if ctx.max_order_notional is not None and price is not None and (price * qty) > float(ctx.max_order_notional):
-            return deny("max_notional", "Order exceeds max notional")
-        if (
-            ctx.price_deviation_pct is not None
-            and ctx.max_price_deviation_pct is not None
-            and float(ctx.price_deviation_pct) > float(ctx.max_price_deviation_pct)
-        ):
-            return deny(
-                "price_band",
-                f"Limit price deviates {float(ctx.price_deviation_pct):.2f}% from LTP",
-            )
-
-        if action == str(ExecutionAction.BUY):
-            if symbol in positions:
-                return deny("duplicate_holding", f"Already holding {symbol}")
-            if max_positions and open_positions >= max_positions:
-                return deny("max_positions", "Max positions reached")
-            notional = float(price or 0.0) * qty
-            if cash and notional > cash:
-                return deny("cash", "Insufficient cash")
-        elif action == str(ExecutionAction.SELL):
-            held = positions.get(symbol)
-            if held is None:
-                return deny("missing_position", f"No position in {symbol}")
-
-        auto_allowed = ctx.allow_auto_approval or action == str(ExecutionAction.CANCEL)
-        requires_approval = not auto_allowed and action in {
-            str(ExecutionAction.BUY),
-            str(ExecutionAction.SELL),
-            str(ExecutionAction.MODIFY),
-        }
-        decision = PolicyDecision.REQUIRE_APPROVAL if requires_approval else PolicyDecision.ALLOW
-        reason_code = "live_approval_required" if requires_approval else "live_allow"
-        reason_detail = "Live order queued pending owner approval" if requires_approval else "Live action permitted"
-        return PolicyVerdict(
-            decision=decision,
-            reasons=[reason_detail],
-            machine_reasons=[{"code": reason_code, "detail": reason_detail}],
-            requires_approval=requires_approval,
-            approved_mode=ctx.mode,
-        )
+        return deny("paper_only", "Only paper trading is supported in this build")
 
 
 def compute_price_deviation_pct(limit_price: Optional[float], ltp: Optional[float]) -> Optional[float]:

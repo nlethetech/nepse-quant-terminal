@@ -32,8 +32,6 @@ from backend.quant_pro.message_formatters import (
     format_trade_activity_html,
 )
 from backend.quant_pro.control_plane.command_service import build_live_trader_control_plane
-from backend.quant_pro.control_plane.decision_journal import update_approval_request
-from backend.quant_pro.control_plane.models import ApprovalStatus
 
 if TYPE_CHECKING:
     from backend.trading.live_trader import LiveTrader
@@ -279,20 +277,12 @@ def _build_owner_help_message() -> str:
         "/attribution — Selection, timing, drag breakdown\n"
         "/signals — Today’s buy candidates\n"
         "/trades — Recent trade log\n"
-        "/orders_live — Latest broker order states\n"
-        "/positions_live — Latest broker positions\n"
         "/tms_status — Browser session and live status\n"
         "/tms_account — Clean TMS account summary\n"
         "/tms_funds — Collateral, refund/load, payable/receivable\n"
         "/tms_holdings — DP holdings snapshot\n"
         "/tms_trades — Daily and historic trade book snapshot\n"
         "/tms_health — Session, last sync, selector health\n"
-        "/mode_live — Current execution mode\n"
-        "/reconcile_live — Pull broker state into local journal\n"
-        "/kill_live [entries|all] — Halt live execution\n"
-        "/resume_live — Resume live execution\n"
-        "/cancel ORDER_REF — Cancel live order\n"
-        "/modify ORDER_REF PRICE [QTY] — Modify live order\n"
         "/status — Market and system state\n"
         "/buy SYMBOL SHARES [PRICE] — Manual buy\n"
         "/sell SYMBOL SHARES|all [PRICE] — Manual sell\n"
@@ -2092,15 +2082,6 @@ async def cmd_tms_holdings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.to_thread(functools.partial(trader.refresh_tms_monitor, force=True, emit_alerts=False))
     await update.message.reply_text(_build_tms_holdings_message(trader, force=False), parse_mode="HTML")
 
-
-@authorized
-    trader = _get_trader()
-    if not trader:
-        await update.message.reply_text("Trader not initialized.")
-        return
-    await asyncio.to_thread(functools.partial(trader.refresh_tms_monitor, force=True, emit_alerts=False))
-
-
 @authorized
 async def cmd_tms_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trader = _get_trader()
@@ -2119,90 +2100,6 @@ async def cmd_tms_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await asyncio.to_thread(functools.partial(trader.refresh_tms_monitor, force=True, emit_alerts=False))
     await update.message.reply_text(_build_tms_health_message(trader, force=False), parse_mode="HTML")
-
-
-@authorized
-async def cmd_orders_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trader = _get_trader()
-    if not trader:
-        await update.message.reply_text("Trader not initialized.")
-        return
-    await update.message.reply_text(_build_live_orders_message(trader), parse_mode="HTML")
-
-
-@authorized
-async def cmd_positions_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trader = _get_trader()
-    if not trader:
-        await update.message.reply_text("Trader not initialized.")
-        return
-    await update.message.reply_text(_build_live_positions_message(trader), parse_mode="HTML")
-
-
-@authorized
-async def cmd_mode_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trader = _get_trader()
-    if not trader:
-        await update.message.reply_text("Trader not initialized.")
-        return
-    await update.message.reply_text(_build_live_mode_message(trader), parse_mode="HTML")
-
-
-@authorized
-async def cmd_reconcile_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trader = _get_trader()
-    if not trader:
-        await update.message.reply_text("Trader not initialized.")
-        return
-    if not trader.live_execution_enabled:
-        await update.message.reply_text("Live execution is disabled.")
-        return
-    summary = trader.reconcile_live_orders()
-    await update.message.reply_text(
-        (
-            "<b>RECONCILE LIVE</b>\n\n"
-            "<code>"
-            f"  Orders fetched : {int(summary.get('orders_saved') or 0)}\n"
-            f"  Positions saved: {int(summary.get('positions_saved') or 0)}\n"
-            f"  Matched intents: {int(summary.get('matched_intents') or 0)}"
-            "</code>"
-        ),
-        parse_mode="HTML",
-    )
-
-
-@authorized
-async def cmd_kill_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trader = _get_trader()
-    if not trader:
-        await update.message.reply_text("Trader not initialized.")
-        return
-    if not trader.live_execution_enabled:
-        await update.message.reply_text("Live execution is disabled.")
-        return
-    args = context.args or []
-    level = str(args[0]).lower() if args else "all"
-    if level not in {"entries", "all"}:
-        await update.message.reply_text("Usage: <code>/kill_live [entries|all]</code>", parse_mode="HTML")
-        return
-    trader.kill_live(level=level, reason="owner telegram halt")
-    await update.message.reply_text(
-        f"<b>LIVE HALTED</b>\n\n<code>  Level: {level}</code>",
-        parse_mode="HTML",
-    )
-
-
-@authorized
-async def cmd_resume_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trader = _get_trader()
-    if not trader:
-        await update.message.reply_text("Trader not initialized.")
-        return
-    if not trader.live_execution_enabled:
-        await update.message.reply_text("Live execution is disabled.")
-        return
-    trader.resume_live()
-    await update.message.reply_text("<b>LIVE RESUMED</b>", parse_mode="HTML")
 
 
 @authorized
@@ -2382,42 +2279,7 @@ async def buy_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
 
     if trader.live_execution_enabled:
-        if not args:
-            await _send_signals(update.message)
-            await update.message.reply_text(
-                "Live mode requires explicit pricing.\nUse: <code>/buy SYMBOL SHARES PRICE</code>",
-                parse_mode="HTML",
-            )
-            return ConversationHandler.END
-        if len(args) < 3:
-            await update.message.reply_text(
-                "Usage: <code>/buy SYMBOL SHARES PRICE</code>",
-                parse_mode="HTML",
-            )
-            return ConversationHandler.END
-        symbol = args[0].upper()
-        shares = _parse_int(args[1])
-        limit_price = _parse_float(args[2])
-        if not shares or shares <= 0 or not limit_price or limit_price <= 0:
-            await update.message.reply_text(
-                "Invalid live order. Usage: <code>/buy SYMBOL SHARES PRICE</code>",
-                parse_mode="HTML",
-            )
-            return ConversationHandler.END
-        ok, detail, intent = trader.create_live_owner_buy_intent(symbol, shares, limit_price)
-        if not ok or intent is None:
-            await update.message.reply_text(f"Live buy rejected: {detail}")
-            return ConversationHandler.END
-        latest_intent = load_execution_intent(intent.intent_id) or intent
-        msg = trader._format_live_receipt_html(latest_intent)
-        if latest_intent.requires_confirmation:
-            await update.message.reply_text(
-                msg,
-                parse_mode="HTML",
-                reply_markup=_build_live_preview_keyboard(latest_intent.intent_id, confirm_label="Confirm Buy"),
-            )
-        else:
-            await update.message.reply_text(msg, parse_mode="HTML")
+        await update.message.reply_text("Only paper trading is supported in this build.")
         return ConversationHandler.END
 
     # /buy with no args → show signals as buttons
@@ -2563,55 +2425,7 @@ async def sell_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
 
     if trader.live_execution_enabled:
-        if not args:
-            await update.message.reply_text(
-                "Live mode requires explicit pricing.\nUse: <code>/sell SYMBOL SHARES PRICE</code> or <code>/sell SYMBOL all PRICE</code>",
-                parse_mode="HTML",
-            )
-            return ConversationHandler.END
-        if len(args) < 3:
-            await update.message.reply_text(
-                "Usage: <code>/sell SYMBOL SHARES PRICE</code> or <code>/sell SYMBOL all PRICE</code>",
-                parse_mode="HTML",
-            )
-            return ConversationHandler.END
-        symbol = args[0].upper()
-        raw_qty = str(args[1]).strip().lower()
-        limit_price = _parse_float(args[2])
-        if not limit_price or limit_price <= 0:
-            await update.message.reply_text("Limit price must be positive.")
-            return ConversationHandler.END
-        if raw_qty == "all":
-            with trader._state_lock:
-                pos = trader.positions.get(symbol)
-                shares = int(pos.shares) if pos is not None else 0
-            if shares <= 0:
-                await update.message.reply_text(
-                    f"No local position size available for {symbol}. Use an explicit quantity.",
-                )
-                return ConversationHandler.END
-        else:
-            shares = _parse_int(raw_qty) or 0
-        if shares <= 0:
-            await update.message.reply_text(
-                "Invalid live sell. Usage: <code>/sell SYMBOL SHARES PRICE</code> or <code>/sell SYMBOL all PRICE</code>",
-                parse_mode="HTML",
-            )
-            return ConversationHandler.END
-        ok, detail, intent = trader.create_live_owner_sell_intent(symbol, shares, limit_price)
-        if not ok or intent is None:
-            await update.message.reply_text(f"Live sell rejected: {detail}")
-            return ConversationHandler.END
-        latest_intent = load_execution_intent(intent.intent_id) or intent
-        msg = trader._format_live_receipt_html(latest_intent)
-        if latest_intent.requires_confirmation:
-            await update.message.reply_text(
-                msg,
-                parse_mode="HTML",
-                reply_markup=_build_live_preview_keyboard(latest_intent.intent_id, confirm_label="Confirm Sell"),
-            )
-        else:
-            await update.message.reply_text(msg, parse_mode="HTML")
+        await update.message.reply_text("Only paper trading is supported in this build.")
         return ConversationHandler.END
 
     # /sell with no args → show portfolio with sell buttons
@@ -2713,123 +2527,6 @@ async def sell_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
     await query.edit_message_text(result.message, parse_mode="HTML")
-    return ConversationHandler.END
-
-
-@authorized
-async def cmd_cancel_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trader = _get_trader()
-    if not trader:
-        await update.message.reply_text("Trader not initialized.")
-        return
-    if not trader.live_execution_enabled:
-        await update.message.reply_text("Live execution is disabled.")
-        return
-    args = context.args or []
-    if len(args) < 1:
-        await update.message.reply_text("Usage: <code>/cancel ORDER_REF</code>", parse_mode="HTML")
-        return
-    ok, detail, intent = trader.create_live_owner_cancel_intent(args[0])
-    if not ok or intent is None:
-        await update.message.reply_text(f"Cancel rejected: {detail}")
-        return
-    latest_intent = load_execution_intent(intent.intent_id) or intent
-    msg = trader._format_live_receipt_html(latest_intent)
-    if latest_intent.requires_confirmation:
-        await update.message.reply_text(
-            msg,
-            parse_mode="HTML",
-            reply_markup=_build_live_preview_keyboard(latest_intent.intent_id, confirm_label="Confirm Cancel"),
-        )
-    else:
-        await update.message.reply_text(msg, parse_mode="HTML")
-
-
-@authorized
-async def cmd_modify_live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    trader = _get_trader()
-    if not trader:
-        await update.message.reply_text("Trader not initialized.")
-        return
-    if not trader.live_execution_enabled:
-        await update.message.reply_text("Live execution is disabled.")
-        return
-    args = context.args or []
-    if len(args) < 2:
-        await update.message.reply_text(
-            "Usage: <code>/modify ORDER_REF PRICE [QTY]</code>",
-            parse_mode="HTML",
-        )
-        return
-    order_ref = args[0]
-    limit_price = _parse_float(args[1])
-    qty = _parse_int(args[2]) if len(args) > 2 else None
-    if not limit_price or limit_price <= 0:
-        await update.message.reply_text("Limit price must be positive.")
-        return
-    if qty is not None and qty <= 0:
-        await update.message.reply_text("Quantity must be positive when provided.")
-        return
-    ok, detail, intent = trader.create_live_owner_modify_intent(order_ref, limit_price, quantity=qty)
-    if not ok or intent is None:
-        await update.message.reply_text(f"Modify rejected: {detail}")
-        return
-    latest_intent = load_execution_intent(intent.intent_id) or intent
-    msg = trader._format_live_receipt_html(latest_intent)
-    if latest_intent.requires_confirmation:
-        await update.message.reply_text(
-            msg,
-            parse_mode="HTML",
-            reply_markup=_build_live_preview_keyboard(latest_intent.intent_id, confirm_label="Confirm Modify"),
-        )
-    else:
-        await update.message.reply_text(msg, parse_mode="HTML")
-
-
-@authorized_callback
-async def live_confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    payload = str(query.data or "")
-    _, action, intent_id = payload.split("_", 2)
-    trader = _get_trader()
-    if not trader:
-        await query.edit_message_text("Trader not initialized.")
-        return ConversationHandler.END
-
-    if action == "cancel":
-        update_execution_intent(
-            intent_id,
-            status=str(ExecutionStatus.CANCELLED),
-            completed_at=utc_now_iso(),
-            last_error="Cancelled before submission",
-        )
-        update_approval_request(intent_id, status=ApprovalStatus.CANCELLED, metadata={"cancelled_at": utc_now_iso()})
-        await query.edit_message_text("Live order cancelled before submission.")
-        return ConversationHandler.END
-
-    command = build_live_trader_control_plane(trader).confirm_live_intent(
-        intent_id,
-        mode=getattr(trader, "execution_mode", "live"),
-    )
-    payload = dict(command.payload or {})
-    raw_result = payload.get("result")
-    intent = load_execution_intent(intent_id)
-    result = None
-    if isinstance(raw_result, dict):
-
-        result = ExecutionResult(**raw_result)
-    if intent is None:
-        await query.edit_message_text("Live intent not found.")
-        return ConversationHandler.END
-
-    latest_intent = load_execution_intent(intent.intent_id) or intent
-    msg = trader._format_live_receipt_html(latest_intent, result=result)
-    await query.edit_message_text(msg, parse_mode="HTML")
-    if result is not None and result.screenshot_path:
-        with open(result.screenshot_path, "rb") as handle:
-            await query.message.reply_photo(photo=handle, caption="TMS receipt", parse_mode="HTML")
     return ConversationHandler.END
 
 
@@ -3057,9 +2754,9 @@ async def viewer_callback_router(update: Update, context: ContextTypes.DEFAULT_T
 OWNER_COMMANDS: Sequence[str] = (
     "start", "buy", "sell", "p", "portfolio", "nav", "alpha", "risk",
     "signals", "trades", "status", "help", "short", "st", "calendar",
-    "refresh", "summary", "health", "daily", "attribution", "cancel",
-    "modify", "tms_status", "tms_account", "tms_funds", "tms_holdings",
-    "kill_live", "resume_live", "reconcile_live", "mode_live",
+    "refresh", "summary", "health", "daily", "attribution",
+    "tms_status", "tms_account", "tms_funds", "tms_holdings",
+    "tms_trades", "tms_health",
 )
 
 VIEWER_COMMANDS: Sequence[str] = (
@@ -3097,8 +2794,6 @@ def _build_application(
     else:
         app.add_handler(CommandHandler("buy", buy_entry))
         app.add_handler(CommandHandler("sell", sell_entry))
-        app.add_handler(CommandHandler("cancel", cmd_cancel_live))
-        app.add_handler(CommandHandler("modify", cmd_modify_live))
         app.add_handler(CommandHandler("p", cmd_portfolio))
         app.add_handler(CommandHandler("portfolio", cmd_portfolio))
         app.add_handler(CommandHandler("nav", cmd_nav))
@@ -3121,16 +2816,9 @@ def _build_application(
         app.add_handler(CommandHandler("tms_holdings", cmd_tms_holdings))
         app.add_handler(CommandHandler("tms_trades", cmd_tms_trades))
         app.add_handler(CommandHandler("tms_health", cmd_tms_health))
-        app.add_handler(CommandHandler("orders_live", cmd_orders_live))
-        app.add_handler(CommandHandler("positions_live", cmd_positions_live))
-        app.add_handler(CommandHandler("kill_live", cmd_kill_live))
-        app.add_handler(CommandHandler("resume_live", cmd_resume_live))
-        app.add_handler(CommandHandler("reconcile_live", cmd_reconcile_live))
-        app.add_handler(CommandHandler("mode_live", cmd_mode_live))
 
         app.add_handler(CallbackQueryHandler(buy_confirm_handler, pattern="^buy_(confirm|cancel)$"))
         app.add_handler(CallbackQueryHandler(sell_confirm_handler, pattern="^sell_(confirm|cancel)$"))
-        app.add_handler(CallbackQueryHandler(live_confirm_handler, pattern=r"^live_(confirm|cancel)_.+$"))
         app.add_handler(CallbackQueryHandler(owner_callback_router))
 
     # Error handler to surface hidden exceptions

@@ -1,4 +1,4 @@
-"""Optional MCP server exposing the NEPSE trading control plane."""
+"""Optional MCP server exposing the paper-trading NEPSE control plane."""
 
 from __future__ import annotations
 
@@ -54,19 +54,8 @@ def build_tool_adapters(service: ControlPlaneCommandService) -> Dict[str, Callab
         ),
         "review_trade_candidate": lambda **kwargs: service.review_trade_candidate(**kwargs),
         "submit_paper_order": lambda **kwargs: service.submit_paper_order(**kwargs).to_record(),
-        "create_live_intent": lambda **kwargs: service.create_live_intent(**kwargs).to_record(),
-        "confirm_live_intent": lambda intent_id, mode="live": service.confirm_live_intent(intent_id, mode=mode).to_record(),
-        "cancel_live_intent": lambda order_ref, operator_surface="mcp": service.cancel_live_intent(order_ref, operator_surface=operator_surface).to_record(),
-        "modify_live_intent": lambda order_ref, limit_price, quantity=None, operator_surface="mcp": service.modify_live_intent(
-            order_ref,
-            limit_price=limit_price,
-            quantity=quantity,
-            operator_surface=operator_surface,
-        ).to_record(),
-        "reconcile_live_state": lambda: service.reconcile_live_state().to_record(),
         "halt_trading": lambda level="all", reason="mcp halt": service.halt_trading(level=level, reason=reason).to_record(),
         "resume_trading": lambda: service.resume_trading().to_record(),
-        "sync_watchlist": lambda action="fetch", symbol=None: service.sync_watchlist(action=action, symbol=symbol).to_record(),
         "get_agent_tab_state": lambda: {
             "analysis": load_agent_analysis(),
             "history": load_agent_history(limit=20),
@@ -227,52 +216,6 @@ def build_server(
         )
 
     @server.tool()
-    def create_live_intent(
-        action: str,
-        symbol: str,
-        quantity: int = 0,
-        limit_price: float | None = None,
-        target_order_ref: str | None = None,
-        mode: str = "live",
-        source: str = "strategy_entry",
-        reason: str = "",
-        strategy_tag: str = "",
-        operator_surface: str = "mcp",
-    ):
-        return adapters["create_live_intent"](
-            action=action,
-            symbol=symbol,
-            quantity=quantity,
-            limit_price=limit_price,
-            target_order_ref=target_order_ref,
-            mode=mode,
-            source=source,
-            reason=reason,
-            strategy_tag=strategy_tag,
-            operator_surface=operator_surface,
-        )
-
-    @server.tool()
-    def confirm_live_intent(intent_id: str, mode: str = "live"):
-        return adapters["confirm_live_intent"](intent_id=intent_id, mode=mode)
-
-    @server.tool()
-    def cancel_live_intent(order_ref: str, operator_surface: str = "mcp"):
-        return adapters["cancel_live_intent"](order_ref=order_ref, operator_surface=operator_surface)
-
-    @server.tool()
-    def modify_live_intent(order_ref: str, limit_price: float, quantity: int | None = None, operator_surface: str = "mcp"):
-        return adapters["modify_live_intent"](
-            order_ref=order_ref,
-            limit_price=limit_price,
-            quantity=quantity,
-            operator_surface=operator_surface,
-        )
-
-    @server.tool()
-    def reconcile_live_state():
-        return adapters["reconcile_live_state"]()
-
     @server.tool()
     def halt_trading(level: str = "all", reason: str = "mcp halt"):
         return adapters["halt_trading"](level=level, reason=reason)
@@ -280,10 +223,6 @@ def build_server(
     @server.tool()
     def resume_trading():
         return adapters["resume_trading"]()
-
-    @server.tool()
-    def sync_watchlist(action: str = "fetch", symbol: str | None = None):
-        return adapters["sync_watchlist"](action=action, symbol=symbol)
 
     @server.tool()
     def get_agent_tab_state():

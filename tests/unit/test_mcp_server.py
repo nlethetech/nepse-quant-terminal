@@ -23,29 +23,11 @@ class DummyService:
     def submit_paper_order(self, **kwargs):
         return CommandResult(True, "submitted", "paper_ok", TradingMode.PAPER, payload=kwargs)
 
-    def create_live_intent(self, **kwargs):
-        return CommandResult(True, "pending_confirmation", "live_ok", TradingMode.LIVE, payload=kwargs, intent_id="intent_1")
-
-    def confirm_live_intent(self, intent_id, mode="live"):
-        return CommandResult(True, "confirmed", "confirm_ok", TradingMode.LIVE, intent_id=intent_id)
-
-    def cancel_live_intent(self, order_ref, operator_surface="mcp"):
-        return CommandResult(True, "ok", "cancel_ok", TradingMode.LIVE, payload={"order_ref": order_ref})
-
-    def modify_live_intent(self, order_ref, limit_price, quantity=None, operator_surface="mcp"):
-        return CommandResult(True, "ok", "modify_ok", TradingMode.LIVE, payload={"order_ref": order_ref, "limit_price": limit_price, "quantity": quantity})
-
-    def reconcile_live_state(self):
-        return CommandResult(True, "ok", "reconcile_ok", TradingMode.LIVE, payload={"matched_intents": 1})
-
     def halt_trading(self, level="all", reason="mcp halt"):
-        return CommandResult(True, "halted", "halt_ok", TradingMode.LIVE, payload={"level": level})
+        return CommandResult(True, "halted", "halt_ok", TradingMode.PAPER, payload={"level": level})
 
     def resume_trading(self):
-        return CommandResult(True, "resumed", "resume_ok", TradingMode.LIVE)
-
-    def sync_watchlist(self, action="fetch", symbol=None):
-        return CommandResult(True, "ok", "watch_ok", TradingMode.LIVE, payload={"action": action, "symbol": symbol})
+        return CommandResult(True, "resumed", "resume_ok", TradingMode.PAPER)
 
 
 def test_mcp_tool_adapters_route_to_service():
@@ -54,11 +36,11 @@ def test_mcp_tool_adapters_route_to_service():
     assert tools["get_market_snapshot"]() == {"market": "ok"}
     assert tools["review_trade_candidate"](mode="paper", action="buy", symbol="NABIL", quantity=10, limit_price=500.0) == {"reviewed": "NABIL"}
 
-    live = tools["create_live_intent"](action="buy", symbol="NABIL", quantity=10, limit_price=500.0)
-    assert live["intent_id"] == "intent_1"
-
     paper = tools["submit_paper_order"](action="buy", symbol="NABIL", quantity=10, limit_price=500.0)
     assert paper["payload"]["symbol"] == "NABIL"
+    assert "create_live_intent" not in tools
+    assert "confirm_live_intent" not in tools
+    assert "reconcile_live_state" not in tools
 
 
 def test_mcp_tool_adapters_expose_nepalosint_tools(monkeypatch):

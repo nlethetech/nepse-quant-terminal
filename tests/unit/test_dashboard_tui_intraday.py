@@ -264,16 +264,16 @@ def test_set_status_colors_rejections_red():
     assert any(span.style == dashboard_tui.LOSS_HI for span in value.spans)
 
 
-def test_display_live_override_changes_visible_mode_labels(monkeypatch):
+def test_display_live_override_keeps_paper_mode_labels(monkeypatch):
     app = dashboard_tui.NepseDashboard.__new__(dashboard_tui.NepseDashboard)
     app.trade_mode = "paper"
     app._trading_engine = None
 
     monkeypatch.setenv("NEPSE_TUI_SCREENSHOT_LIVE", "1")
 
-    assert dashboard_tui.NepseDashboard._display_live_badge(app) is True
-    assert dashboard_tui.NepseDashboard._display_mode_label(app) == "LIVE"
-    assert "LIVE" in dashboard_tui.NepseDashboard._display_nav_mode_tag(app)
+    assert dashboard_tui.NepseDashboard._display_live_badge(app) is False
+    assert dashboard_tui.NepseDashboard._display_mode_label(app) == "PAPER AUTO"
+    assert "PAPER" in dashboard_tui.NepseDashboard._display_nav_mode_tag(app)
 
 
 def test_populate_trades_full_scales_fractional_pnl_pct_to_percent(monkeypatch):

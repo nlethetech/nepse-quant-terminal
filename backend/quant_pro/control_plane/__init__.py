@@ -1,4 +1,4 @@
-"""MCP-first trading control plane for NEPSE operator workflows."""
+"""MCP-first paper-trading control plane for NEPSE operator workflows."""
 
 from .command_service import ControlPlaneCommandService, build_live_trader_control_plane, build_tui_control_plane
 from .models import (

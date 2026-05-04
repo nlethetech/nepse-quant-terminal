@@ -1,4 +1,4 @@
-"""Unified command service for paper and live execution paths."""
+"""Unified command service for the paper execution path."""
 
 from __future__ import annotations
 
@@ -118,7 +118,7 @@ class ControlPlaneCommandService:
         return build_risk_snapshot_from_trader(self.trader).to_record()
 
     def get_live_state(self) -> Dict[str, Any]:
-        return build_live_state_snapshot()
+        return {"enabled": False, "mode": "paper", "message": "Only paper trading is supported in this build"}
 
     def review_trade_candidate(
         self,
@@ -232,122 +232,30 @@ class ControlPlaneCommandService:
         operator_surface: str = "mcp",
     ) -> CommandResult:
         target_mode = _normalize_mode(str(mode))
-        verdict = self._evaluate_policy(
-            target_mode,
-            action=action,
-            symbol=symbol,
-            quantity=quantity,
-            limit_price=limit_price,
-            target_order_ref=target_order_ref,
-            allow_auto_approval=(str(action).lower() == str(ExecutionAction.CANCEL)),
-        )
-        record_policy_event(
-            decision_id=None,
-            symbol=symbol,
-            action=action,
-            mode=str(target_mode),
-            verdict=verdict,
-            metadata={"operator_surface": operator_surface, "strategy_tag": strategy_tag, "reason": reason},
-        )
-        if not verdict.allowed:
-            return CommandResult(False, "rejected", "; ".join(verdict.reasons), target_mode)
-
-        intent = ExecutionIntent(
-            action=ExecutionAction(str(action).lower()),
-            symbol=str(symbol).upper(),
-            quantity=int(quantity or 0),
-            limit_price=float(limit_price) if limit_price is not None else None,
-            source=ExecutionSource(str(source)),
-            target_order_ref=target_order_ref,
-            reason=reason,
-            strategy_tag=strategy_tag,
-            requires_confirmation=bool(verdict.requires_approval),
-            status=ExecutionStatus.PENDING_CONFIRMATION if verdict.requires_approval else ExecutionStatus.QUEUED,
-            metadata=dict(metadata or {}),
-        )
-
-        if target_mode == TradingMode.SHADOW_LIVE:
-            intent.status = ExecutionStatus.PENDING_CONFIRMATION if verdict.requires_approval else ExecutionStatus.ACCEPTED
-            save_execution_intent(intent)
-            approval_request = self._maybe_create_approval_request(
-                intent,
-                verdict=verdict,
-                operator_surface=operator_surface,
-                summary=f"{intent.action.upper()} {intent.symbol} x{intent.quantity} @ {intent.limit_price or 0:.1f}",
-            )
-            status = "pending_confirmation" if verdict.requires_approval else "shadow_recorded"
-            return CommandResult(
-                True,
-                status,
-                "Shadow live intent recorded",
-                target_mode,
-                payload={"intent": intent.to_record()},
-                intent_id=intent.intent_id,
-                approval_request=approval_request,
-            )
-
-        if self.live_service is None:
-            return CommandResult(False, "unavailable", "Live execution service unavailable", target_mode)
-
-        ok, detail, created_intent, result = self.live_service.submit_intent(intent, wait=not verdict.requires_approval)
-        approval_request = self._maybe_create_approval_request(
-            created_intent,
-            verdict=verdict,
-            operator_surface=operator_surface,
-            summary=f"{created_intent.action.upper()} {created_intent.symbol} x{created_intent.quantity} @ {created_intent.limit_price or 0:.1f}",
-        )
-        payload = {"intent": created_intent.to_record()}
-        if result is not None:
-            payload["result"] = result.to_record()
-        status = "pending_confirmation" if verdict.requires_approval else detail
         return CommandResult(
-            ok,
-            status,
-            detail,
+            False,
+            "unsupported",
+            "Only paper trading is supported in this build",
             target_mode,
-            payload=payload,
-            intent_id=created_intent.intent_id,
-            approval_request=approval_request,
         )
 
     def confirm_live_intent(self, intent_id: str, *, mode: str = "live") -> CommandResult:
         target_mode = _normalize_mode(str(mode))
-        if target_mode == TradingMode.SHADOW_LIVE:
-            update_approval_request(intent_id, status=ApprovalStatus.APPROVED, metadata={"confirmed_at": utc_now_iso()})
-            approval = load_approval_request(intent_id)
-            return CommandResult(
-                True,
-                "approved",
-                "Shadow live approval recorded",
-                target_mode,
-                payload={},
-                intent_id=intent_id,
-                approval_request=approval,
-            )
-        if self.live_service is None:
-            return CommandResult(False, "unavailable", "Live execution service unavailable", target_mode, intent_id=intent_id)
-        result = self.live_service.confirm_intent(intent_id, wait=True)
-        intent = load_execution_intent(intent_id)
-        update_approval_request(intent_id, status=ApprovalStatus.APPROVED, metadata={"confirmed_at": utc_now_iso()})
-        approval = load_approval_request(intent_id)
-        payload: Dict[str, Any] = {}
-        if intent is not None:
-            payload["intent"] = intent.to_record()
-        if result is not None:
-            payload["result"] = result.to_record()
-        return CommandResult(True, "confirmed", "Live intent confirmed", target_mode, payload=payload, intent_id=intent_id, approval_request=approval)
+        return CommandResult(
+            False,
+            "unsupported",
+            "Only paper trading is supported in this build",
+            target_mode,
+            intent_id=intent_id,
+        )
 
     def cancel_live_intent(self, order_ref: str, *, operator_surface: str = "mcp") -> CommandResult:
-        return self.create_live_intent(
-            action=str(ExecutionAction.CANCEL),
-            symbol="ORDER",
-            quantity=0,
-            limit_price=None,
-            target_order_ref=order_ref,
-            mode=str(self.mode if self.mode != TradingMode.PAPER else TradingMode.LIVE),
-            source=str(ExecutionSource.OWNER_MANUAL),
-            reason="cancel_live_order",
-            operator_surface=operator_surface,
+        return CommandResult(
+            False,
+            "unsupported",
+            "Only paper trading is supported in this build",
+            TradingMode.PAPER,
+            payload={"order_ref": order_ref, "operator_surface": operator_surface},
         )
 
     def modify_live_intent(
@@ -358,26 +266,26 @@ class ControlPlaneCommandService:
         quantity: Optional[int] = None,
         operator_surface: str = "mcp",
     ) -> CommandResult:
-        return self.create_live_intent(
-            action=str(ExecutionAction.MODIFY),
-            symbol="ORDER",
-            quantity=int(quantity or 0),
-            limit_price=float(limit_price),
-            target_order_ref=order_ref,
-            mode=str(self.mode if self.mode != TradingMode.PAPER else TradingMode.LIVE),
-            source=str(ExecutionSource.OWNER_MANUAL),
-            reason="modify_live_order",
-            operator_surface=operator_surface,
+        return CommandResult(
+            False,
+            "unsupported",
+            "Only paper trading is supported in this build",
+            TradingMode.PAPER,
+            payload={
+                "order_ref": order_ref,
+                "limit_price": limit_price,
+                "quantity": quantity,
+                "operator_surface": operator_surface,
+            },
         )
 
     def reconcile_live_state(self) -> CommandResult:
-        if self.reconcile_callback is not None:
-            summary = dict(self.reconcile_callback() or {})
-        elif self.live_service is not None:
-            summary = dict(self.live_service.reconcile() or {})
-        else:
-            return CommandResult(False, "unavailable", "Live reconciliation unavailable", TradingMode.LIVE)
-        return CommandResult(True, "ok", "Live state reconciled", TradingMode.LIVE, payload=summary)
+        return CommandResult(
+            False,
+            "unsupported",
+            "Only paper trading is supported in this build",
+            TradingMode.PAPER,
+        )
 
     def halt_trading(self, *, level: str = "all", reason: str = "manual halt") -> CommandResult:
         if self.halt_callback is None:
@@ -413,10 +321,12 @@ class ControlPlaneCommandService:
     def _submit_paper_via_trader(self, action: str, symbol: str, quantity: int, limit_price: float) -> CommandResult:
         if self.trader is None:
             return CommandResult(False, "unsupported", "Paper trader unavailable", TradingMode.PAPER)
+        buy_action = str(ExecutionAction.BUY.value).lower()
+        sell_action = str(ExecutionAction.SELL.value).lower()
         with self.trader._state_lock:
-            if action == str(ExecutionAction.BUY):
+            if action == buy_action:
                 ok, msg = self.trader.execute_manual_buy(symbol, quantity, limit_price)
-            elif action == str(ExecutionAction.SELL):
+            elif action == sell_action:
                 held = self.trader.positions.get(symbol)
                 if held is None:
                     return CommandResult(False, "rejected", f"No position in {symbol}.", TradingMode.PAPER)
@@ -484,7 +394,7 @@ class ControlPlaneCommandService:
         allow_auto_approval: bool = False,
     ):
         live_settings = getattr(self.trader, "live_settings", None)
-        ltp = fetch_latest_ltp(symbol) if symbol and symbol != "ORDER" else None
+        ltp = fetch_latest_ltp(symbol) if mode != TradingMode.PAPER and symbol and symbol != "ORDER" else None
         max_positions = int(getattr(self.trader, "max_positions", 0) or 0)
         positions = dict(getattr(self.trader, "positions", {}) or {})
         portfolio = {
@@ -505,8 +415,12 @@ class ControlPlaneCommandService:
             market_open=self._is_market_open(),
             max_order_notional=float(getattr(live_settings, "max_order_notional", 0.0) or 0.0) or None,
             max_daily_orders=int(getattr(live_settings, "max_daily_orders", 0) or 0) or None,
-            intents_today=count_intents_for_day(self._day_key()),
-            duplicate_open_intent=find_recent_open_intent(str(symbol).upper(), within_seconds=int(getattr(live_settings, "symbol_cooldown_secs", 0) or 0)) is not None if symbol and symbol != "ORDER" else False,
+            intents_today=count_intents_for_day(self._day_key()) if mode != TradingMode.PAPER else 0,
+            duplicate_open_intent=(
+                find_recent_open_intent(str(symbol).upper(), within_seconds=int(getattr(live_settings, "symbol_cooldown_secs", 0) or 0)) is not None
+                if mode != TradingMode.PAPER and symbol and symbol != "ORDER"
+                else False
+            ),
             price_deviation_pct=compute_price_deviation_pct(limit_price, ltp),
             max_price_deviation_pct=float(getattr(live_settings, "max_price_deviation_pct", 0.0) or 0.0) or None,
             owner_confirm_required=bool(getattr(live_settings, "owner_confirm_required", True)),
@@ -540,15 +454,12 @@ class ControlPlaneCommandService:
 def build_live_trader_control_plane(trader: Any) -> ControlPlaneCommandService:
     cached = getattr(trader, "_control_plane_service", None)
     if cached is not None:
-        cached.live_service = getattr(trader, "live_execution_service", None)
+        cached.live_service = None
         return cached
     service = ControlPlaneCommandService(
         trader=trader,
-        live_service=getattr(trader, "live_execution_service", None),
-        mode=_normalize_mode(str(getattr(trader, "execution_mode", "paper") or "paper")),
-        halt_callback=lambda level, reason: trader.kill_live(level=level, reason=reason),
-        resume_callback=trader.resume_live,
-        reconcile_callback=trader.reconcile_live_orders,
+        live_service=None,
+        mode=TradingMode.PAPER,
         service_label="live_trader",
     )
     setattr(trader, "_control_plane_service", service)
@@ -563,8 +474,8 @@ def build_tui_control_plane(dashboard: Any) -> ControlPlaneCommandService:
 
     if cached is None:
         service = ControlPlaneCommandService(
-            live_service=getattr(dashboard, "tms_service", None),
-            mode=_normalize_mode(str(getattr(dashboard, "trade_mode", "paper"))),
+            live_service=None,
+            mode=TradingMode.PAPER,
             paper_submitter=_paper_submitter,
             service_label="dashboard_tui",
         )
@@ -572,13 +483,13 @@ def build_tui_control_plane(dashboard: Any) -> ControlPlaneCommandService:
     else:
         service = cached
 
-    service.live_service = getattr(dashboard, "tms_service", None)
-    service.mode = _normalize_mode(str(getattr(dashboard, "trade_mode", "paper")))
+    service.live_service = None
+    service.mode = TradingMode.PAPER
     service.paper_submitter = _paper_submitter
-    service.watchlist_fetcher = (lambda: dashboard.tms_service.executor.fetch_watchlist_snapshot()) if getattr(dashboard, "tms_service", None) else None
-    service.watchlist_adder = (lambda symbol: dashboard.tms_service.executor.add_watchlist_symbol(symbol)) if getattr(dashboard, "tms_service", None) else None
-    service.watchlist_remover = (lambda symbol: dashboard.tms_service.executor.remove_watchlist_symbol(symbol)) if getattr(dashboard, "tms_service", None) else None
-    service.reconcile_callback = (lambda: dashboard.tms_service.reconcile()) if getattr(dashboard, "tms_service", None) else None
+    service.watchlist_fetcher = None
+    service.watchlist_adder = None
+    service.watchlist_remover = None
+    service.reconcile_callback = None
     setattr(dashboard, "_control_plane_service", service)
     return service
 
@@ -597,12 +508,10 @@ def build_env_live_trader_control_plane() -> ControlPlaneCommandService:
         dry_run=os.environ.get("NEPSE_MCP_DRY_RUN", "true").strip().lower() in {"1", "true", "yes", "on"},
         continuous=False,
         headless=True,
-        mode=os.environ.get("NEPSE_MCP_TRADING_MODE", "paper"),
+        mode="paper",
         paper_portfolio=paper_portfolio,
     )
     trader = LiveTrader(args)
-    if trader.live_execution_enabled:
-        trader._start_live_execution_service()
     return build_live_trader_control_plane(trader)
 
 
@@ -610,4 +519,7 @@ def _normalize_mode(mode: str) -> TradingMode:
     raw = str(mode or "paper").strip().lower()
     if raw == "dual":
         return TradingMode.LIVE
-    return TradingMode(raw)
+    try:
+        return TradingMode(raw)
+    except ValueError:
+        return TradingMode.PAPER

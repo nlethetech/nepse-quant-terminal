@@ -1,6 +1,6 @@
 // Global application state types
 
-export type TradingMode = "paper" | "live";
+export type TradingMode = "paper";
 export type TabId =
   | "market"
   | "portfolio"

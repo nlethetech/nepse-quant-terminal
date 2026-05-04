@@ -77,10 +77,10 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     });
     cmds.push({
       id: "mode",
-      label: "Toggle Mode — Switch Paper/Live",
+      label: "Mode — Paper trading",
       shortcut: "M",
       action: () => {
-        dispatch({ type: "OPEN_MODAL", modal: "mode-select" });
+        dispatch({ type: "OPEN_MODAL", modal: "mode_select" });
         onClose();
       },
     });

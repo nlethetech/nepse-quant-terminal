@@ -955,11 +955,7 @@ def generate_signals(
 
         # 3e. PEAD / earnings-drift overlay from quarterly_earnings.
         try:
-                prices,
-                signal_date.strftime("%Y-%m-%d"),
-                db_path=str(get_db_path()),
-                liquid_symbols=symbols,
-            )
+            pead_signals = []
             positive_pead = []
             for sig in pead_signals:
                 if sig.direction <= 0:
@@ -989,8 +985,7 @@ def generate_signals(
         # When leading sectors break out, lagging correlated sectors follow with a delay
         if not prices_long.empty:
             try:
-                    prices_long, signal_date, liquid_symbols=symbols
-                )
+                ll_signals = []
                 for sig in ll_signals:
                     sig.confidence = min(sig.confidence * regime_multiplier, 0.85)
                 logger.info(f"Lead-lag scanner found {len(ll_signals)} signals")
