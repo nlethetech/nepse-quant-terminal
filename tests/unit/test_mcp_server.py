@@ -43,6 +43,20 @@ def test_mcp_tool_adapters_route_to_service():
     assert "reconcile_live_state" not in tools
 
 
+def test_mcp_tool_adapters_expose_paper_agent_graph(monkeypatch):
+    monkeypatch.setattr(
+        "apps.mcp.server.run_paper_decision",
+        lambda candidate: {"candidate": candidate, "portfolio_decision": {"execution_mode": "paper"}},
+        raising=False,
+    )
+
+    tools = build_tool_adapters(DummyService())
+    result = tools["run_multi_agent_decision"]({"symbol": "NABIL"})
+
+    assert result["candidate"]["symbol"] == "NABIL"
+    assert result["portfolio_decision"]["execution_mode"] == "paper"
+
+
 def test_mcp_tool_adapters_expose_nepalosint_tools(monkeypatch):
     monkeypatch.setattr(
         "apps.mcp.server.nepalosint_semantic_story_search",

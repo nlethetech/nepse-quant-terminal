@@ -15,6 +15,7 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 - **Portfolio Analytics** — unrealized/realized P&L, sector concentration, holding age buckets, max drawdown, alpha vs. NEPSE benchmark.
 - **Gold Hedge Overlay** — tracks gold/silver regime (risk-on / neutral / risk-off) and adjusts capital deployment accordingly.
 - **AI Agent** — on-demand analysis of your portfolio positions and signal shortlist. Defaults to a local Ollama model, with Gemma 4 MLX or Claude CLI available as optional backends.
+- **Paper Agent Graph** — cleaned evidence-gated research, debate, risk, and portfolio decision workflow for paper execution only.
 - **Strategy Builder** — create, backtest, and assign custom strategies. Each account runs its own strategy independently.
 - **Statistical Validation** — walk-forward OOS testing, Monte Carlo, CSCV/PBO overfitting detection, deflated Sharpe ratio, random baseline percentile.
 - **MeroShare Import** — seed any account directly from your MeroShare "My Shares Values.csv" export.
@@ -22,6 +23,12 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 ---
 
 ## Architecture
+
+### Paper Agent Workflow
+
+The public agent workflow is evidence-gated, checkpointed, and restricted to paper execution. The implementation in `backend/nepse_agents/` does not include live order routing, credentials, or execution integrations.
+
+![NEPSE Quant Terminal paper agent architecture](docs/assets/nepse-agent-architecture.png)
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -58,6 +65,7 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 | Validation | `validation/` | Walk-forward, Monte Carlo, CSCV, DSR, random baseline |
 | Gold Hedge | `backend/quant_pro/gold_hedge.py` | Gold/silver regime detection → capital deployment % |
 | AI Agent | `backend/agents/agent_analyst.py` | Ollama-first portfolio and signal analysis |
+| Paper Agent Graph | `backend/nepse_agents/` | Evidence-gated research/debate/risk/portfolio workflow; paper-only |
 | NEPSE Calendar | `nepse_calendar.py` | Sun–Thu trading days, public holidays, trading day counter |
 
 ---
