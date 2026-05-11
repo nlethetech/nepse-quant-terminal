@@ -81,6 +81,8 @@ class TUITradingEngine:
         max_positions: int = LONG_TERM_CONFIG["max_positions"],
         holding_days: int = LONG_TERM_CONFIG["holding_days"],
         sector_limit: float = LONG_TERM_CONFIG["sector_limit"],
+        stop_loss_pct: float = LONG_TERM_CONFIG["stop_loss_pct"],
+        trailing_stop_pct: float = LONG_TERM_CONFIG["trailing_stop_pct"],
         refresh_secs: int = 30,   # 30s polling — nepalstock cache refreshes every 15s
         hedge_enabled: bool = True,
         portfolio_file: Optional[Path] = None,
@@ -97,6 +99,8 @@ class TUITradingEngine:
         self.max_positions = max_positions
         self.holding_days = holding_days
         self.sector_limit = sector_limit
+        self.stop_loss_pct = stop_loss_pct
+        self.trailing_stop_pct = trailing_stop_pct
         self.refresh_secs = refresh_secs
         self._hedge_enabled = hedge_enabled
 
@@ -503,7 +507,12 @@ class TUITradingEngine:
                     pos.high_watermark = ltp
 
         # Check exits
-        exits = check_exits(self.positions, self.holding_days)
+        exits = check_exits(
+            self.positions,
+            self.holding_days,
+            self.stop_loss_pct,
+            self.trailing_stop_pct,
+        )
         if not exits:
             self._persist_state()
             return
