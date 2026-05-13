@@ -113,6 +113,7 @@ from backend.agents.agent_analyst import (
 )
 from backend.quant_pro.stock_report import build_stock_report
 from backend.trading.tui_trading_engine import TUITradingEngine
+from backend.trading.paper_execution import PaperExecutionService
 from backend.market.kalimati_market import init_kalimati_db, refresh_kalimati, get_kalimati_display_rows
 from backend.quant_pro.data_scrapers.gold_silver_ingestion import (
     store_nepal_metals_prices,
@@ -4172,6 +4173,11 @@ class NepseDashboard(App):
 
     def _load_paper_orders(self) -> None:
         """Load paper orders from JSON files."""
+        account_id = str(getattr(self, "__dict__", {}).get("_current_account_id", "") or "").strip()
+        if account_id:
+            account_dir = _account_dir(account_id)
+            self.PAPER_ORDERS_FILE = account_dir / "tui_paper_orders.json"
+            self.PAPER_ORDER_HISTORY_FILE = account_dir / "tui_paper_order_history.json"
         self._paper_orders = []
         self._paper_order_history = []
         if self.PAPER_ORDERS_FILE.exists():
@@ -4266,11 +4272,28 @@ class NepseDashboard(App):
         block_reason = self._paper_same_day_trade_block(action, symbol)
         if block_reason:
             return block_reason
-        order = self._create_paper_order(action, symbol, qty, price, slippage)
-        self._paper_orders.append(order)
-        self._save_paper_orders()
+        account_id = str(getattr(self, "__dict__", {}).get("_current_account_id", "") or "account_1")
+        service = PaperExecutionService(
+            account_id,
+            account_dir=_account_dir(account_id),
+            initial_capital=float(INITIAL_CAPITAL),
+        )
+        result = service.submit_order(
+            account_id,
+            action,
+            symbol,
+            qty,
+            price,
+            "dashboard_tui",
+            "",
+            slippage_pct=slippage,
+        )
+        self._load_paper_orders()
         self._populate_orders_tab()
-        return f"Order {order['id']}: {action} {symbol} x{qty} @ {price:,.1f} slip:{slippage:.1f}% — OPEN"
+        if not result.ok:
+            return f"Rejected: {action} {symbol} x{qty} @ {price:,.1f} — {result.message}"
+        order = result.order
+        return f"Order {order.order_id}: {action} {symbol} x{qty} @ {price:,.1f} slip:{slippage:.1f}% — OPEN"
 
     def _cancel_paper_order(self, order_id: str) -> str:
         """Cancel a specific paper order by ID."""
@@ -4305,6 +4328,8 @@ class NepseDashboard(App):
     def _match_paper_orders(self) -> None:
         """Check open orders against current prices and fill if matched."""
         from backend.trading.live_trader import now_nst
+        if str(getattr(self, "__dict__", {}).get("_current_account_id", "") or "").strip():
+            self._load_paper_orders()
         if not self._paper_orders:
             return
         # Get current LTPs from market data
@@ -4324,24 +4349,24 @@ class NepseDashboard(App):
                     if sym and price > 0:
                         ltps[sym] = float(price)
 
-        ts = now_nst().strftime("%Y-%m-%d %H:%M:%S")
-        filled = []
-        for o in self._paper_orders:
-            if o["status"] != "OPEN":
-                continue
-            if str(o.get("source") or "").strip().lower() in {"strategy_paper", "strategy_exit_paper"}:
-                continue
-            sym = o["symbol"]
-            if sym not in ltps:
-                continue
-            ltp = ltps[sym]
-            slip_pct = o.get("slippage_pct", 2.0) / 100.0
-            matched = False
-            if o["action"] == "BUY" and ltp <= o["price"] * (1 + slip_pct):
-                matched = True
-            elif o["action"] == "SELL" and ltp >= o["price"] * (1 - slip_pct):
-                matched = True
-            if matched:
+        if not str(getattr(self, "__dict__", {}).get("_current_account_id", "") or "").strip():
+            ts = now_nst().strftime("%Y-%m-%d %H:%M:%S")
+            filled = []
+            for o in self._paper_orders:
+                if o["status"] != "OPEN":
+                    continue
+                sym = o["symbol"]
+                if sym not in ltps:
+                    continue
+                ltp = ltps[sym]
+                slip_pct = o.get("slippage_pct", 2.0) / 100.0
+                matched = (
+                    o["action"] == "BUY" and ltp <= o["price"] * (1 + slip_pct)
+                ) or (
+                    o["action"] == "SELL" and ltp >= o["price"] * (1 - slip_pct)
+                )
+                if not matched:
+                    continue
                 block_reason = self._paper_same_day_trade_block(o["action"], sym)
                 if block_reason:
                     o["status"] = "CANCELLED"
@@ -4357,20 +4382,42 @@ class NepseDashboard(App):
                 o["fill_price"] = ltp
                 o["updated_at"] = ts
                 filled.append(o)
-                # Execute the trade in paper portfolio
-                if o["action"] == "BUY":
-                    msg = exec_buy(o["symbol"], str(o["qty"]), str(ltp))
-                else:
-                    msg = exec_sell(o["symbol"], str(o["qty"]), str(ltp))
+                msg = exec_buy(o["symbol"], str(o["qty"]), str(ltp)) if o["action"] == "BUY" else exec_sell(o["symbol"], str(o["qty"]), str(ltp))
                 self._append_activity(f"ORDER FILLED: {o['action']} {sym} x{o['qty']} @ {ltp:,.1f} — {msg}")
+            if filled:
+                for o in filled:
+                    self._paper_order_history.append(o)
+                    self._paper_trades_today.append(o)
+                self._paper_orders = [x for x in self._paper_orders if x["status"] == "OPEN"]
+                self._save_paper_orders()
+                self._populate_orders_tab()
+                self._populate_portfolio_and_risk()
+                self._populate_trades_full()
+            self._render_hedge_panel()
+            return
 
-        if filled:
-            today = now_nst().strftime("%Y-%m-%d")
-            for o in filled:
-                self._paper_order_history.append(o)
-                self._paper_trades_today.append(o)
-            self._paper_orders = [x for x in self._paper_orders if x["status"] == "OPEN"]
-            self._save_paper_orders()
+        account_id = str(getattr(self, "__dict__", {}).get("_current_account_id", "") or "account_1")
+        service = PaperExecutionService(
+            account_id,
+            account_dir=_account_dir(account_id),
+            initial_capital=float(INITIAL_CAPITAL),
+        )
+        result = service.match_open_orders(
+            account_id,
+            {sym: {"ltp": ltp, "source": "dashboard_market_snapshot", "age_seconds": 0} for sym, ltp in ltps.items()},
+        )
+
+        for order in result.filled_orders:
+            self._append_activity(
+                f"ORDER FILLED: {order.action} {order.symbol} x{order.filled_qty} @ {order.fill_price:,.1f}"
+            )
+        for order in result.rejected_orders:
+            self._append_activity(
+                f"ORDER REJECTED: {order.action} {order.symbol} — {order.risk_result.get('reason', order.reason)}"
+            )
+
+        if result.filled_orders or result.rejected_orders:
+            self._load_paper_orders()
             self._populate_orders_tab()
             self._populate_portfolio_and_risk()
             self._populate_trades_full()
@@ -4770,10 +4817,13 @@ class NepseDashboard(App):
                 holding_days=int(config.get("holding_days") or LONG_TERM_CONFIG.get("holding_days") or 40),
                 sector_limit=float(config.get("sector_limit") or LONG_TERM_CONFIG.get("sector_limit") or 0.35),
                 hedge_enabled=bool(getattr(self, "_hedge_enabled", True)),
-                portfolio_file=account_dir / "tui_paper_portfolio.csv",
-                trade_log_file=account_dir / "tui_paper_trade_log.csv",
-                nav_log_file=account_dir / "tui_paper_nav_log.csv",
-                state_file=account_dir / "tui_paper_state.json",
+                portfolio_file=account_dir / "paper_portfolio.csv",
+                trade_log_file=account_dir / "paper_trade_log.csv",
+                nav_log_file=account_dir / "paper_nav_log.csv",
+                state_file=account_dir / "paper_state.json",
+                account_id=account_id,
+                strategy_id=strategy_id,
+                strategy_config=config,
                 on_status=self._make_engine_status_cb(account_id),
                 on_activity=self._make_engine_activity_cb(account_id),
                 on_portfolio_changed=self._make_engine_portfolio_cb(account_id),
@@ -7465,25 +7515,54 @@ class NepseDashboard(App):
             if not payload:
                 raise ValueError("Strategy not found")
             self.call_from_thread(self._set_status, f"Backtesting {payload.get('name')}...")
-            # Suppress noisy loggers during backtest to keep TUI clean
-            _bt_loggers = [logging.getLogger(n) for n in ("backend", "simple_backtest", "__main__", "root")]
+            log_path = PROJECT_ROOT / "data" / "runtime" / "logs" / "strategy_backtest.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
+
+            _bt_loggers = [
+                logging.getLogger(n)
+                for n in ("backend", "backend.backtesting.simple_backtest", "backend.trading.strategy_registry")
+            ]
             _bt_prev_levels = [(lg, lg.level) for lg in _bt_loggers]
-            for lg in _bt_loggers:
-                lg.setLevel(logging.WARNING)
             root_logger = logging.getLogger()
             _root_prev = root_logger.level
-            root_logger.setLevel(logging.WARNING)
+            _stream_prev_levels = [
+                (handler, handler.level)
+                for handler in root_logger.handlers
+                if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler)
+            ]
+            root_logger.addHandler(file_handler)
+            root_logger.setLevel(logging.INFO)
+            for lg in _bt_loggers:
+                lg.setLevel(logging.INFO)
+            for handler, _level in _stream_prev_levels:
+                handler.setLevel(logging.WARNING)
             try:
+                logging.getLogger(__name__).info(
+                    "Starting strategy backtest id=%s start=%s end=%s capital=%s log=%s",
+                    strategy_id,
+                    start_date,
+                    end_date,
+                    capital,
+                    log_path,
+                )
                 result = strategy_registry.run_strategy_backtest(
                     payload,
                     start_date=start_date,
                     end_date=end_date,
                     capital=capital,
                 )
+                logging.getLogger(__name__).info("Finished strategy backtest id=%s", strategy_id)
             finally:
                 for lg, lvl in _bt_prev_levels:
                     lg.setLevel(lvl)
                 root_logger.setLevel(_root_prev)
+                for handler, level in _stream_prev_levels:
+                    handler.setLevel(level)
+                root_logger.removeHandler(file_handler)
+                file_handler.close()
             self._strategy_backtest_result = result
             summary = dict(result.get("summary") or {})
             nepse   = dict(result.get("nepse") or {})
@@ -7774,7 +7853,12 @@ class NepseDashboard(App):
         target_dir = _account_dir(account_id)
         _blank_account_files(target_dir)
         for name, active_path in ACTIVE_ACCOUNT_FILES.items():
-            _copy_file_if_exists(Path(active_path), target_dir / name)
+            target = target_dir / name
+            # Account directories are now the canonical paper books. Keep legacy
+            # active-file snapshots from overwriting live autopilot/manual fills.
+            if name != "watchlist.json" and target.exists():
+                continue
+            _copy_file_if_exists(Path(active_path), target)
         registry = _load_accounts_registry()
         accounts = list(registry.get("accounts") or [])
         now_stamp = datetime.now().isoformat(timespec="seconds")
@@ -7894,10 +7978,13 @@ class NepseDashboard(App):
                 holding_days=int(_new_config.get("holding_days") or LONG_TERM_CONFIG.get("holding_days") or 40),
                 sector_limit=float(_new_config.get("sector_limit") or LONG_TERM_CONFIG.get("sector_limit") or 0.35),
                 hedge_enabled=bool(getattr(self, "_hedge_enabled", True)),
-                portfolio_file=_new_adir / "tui_paper_portfolio.csv",
-                trade_log_file=_new_adir / "tui_paper_trade_log.csv",
-                nav_log_file=_new_adir / "tui_paper_nav_log.csv",
-                state_file=_new_adir / "tui_paper_state.json",
+                portfolio_file=_new_adir / "paper_portfolio.csv",
+                trade_log_file=_new_adir / "paper_trade_log.csv",
+                nav_log_file=_new_adir / "paper_nav_log.csv",
+                state_file=_new_adir / "paper_state.json",
+                account_id=account_id,
+                strategy_id=strategy_registry.default_strategy_for_account(account_id),
+                strategy_config=_new_config,
                 on_status=self._make_engine_status_cb(account_id),
                 on_activity=self._make_engine_activity_cb(account_id),
                 on_portfolio_changed=self._make_engine_portfolio_cb(account_id),

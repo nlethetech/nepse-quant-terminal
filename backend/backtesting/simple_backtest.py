@@ -457,9 +457,19 @@ def build_close_lookup(prices_df: pd.DataFrame) -> Dict[str, Dict[Any, float]]:
     return build_price_lookup(prices_df, "close")
 
 
+def build_close_pivot(prices_df: pd.DataFrame) -> pd.DataFrame:
+    """Build date x symbol close matrix, tolerating duplicate symbol/date rows."""
+    return prices_df.pivot_table(
+        index="date",
+        columns="symbol",
+        values="close",
+        aggfunc="last",
+    ).sort_index()
+
+
 def build_vol_lookup(prices_df: pd.DataFrame, window: int = 20) -> Dict[str, Dict[Any, float]]:
     """Precompute trailing 20-day realized daily-return volatility per symbol/date."""
-    close_pivot = prices_df.pivot(index="date", columns="symbol", values="close").sort_index()
+    close_pivot = build_close_pivot(prices_df)
     rolling_vol = close_pivot.pct_change(fill_method=None).rolling(window=window, min_periods=10).std()
     result: Dict[str, Dict[Any, float]] = {}
     for symbol in rolling_vol.columns:
@@ -470,7 +480,7 @@ def build_vol_lookup(prices_df: pd.DataFrame, window: int = 20) -> Dict[str, Dic
 
 def build_ma_lookup(prices_df: pd.DataFrame, window: int = 20) -> Dict[str, Dict[Any, float]]:
     """Precompute trailing N-day simple moving average of close per symbol/date."""
-    close_pivot = prices_df.pivot(index="date", columns="symbol", values="close").sort_index()
+    close_pivot = build_close_pivot(prices_df)
     ma = close_pivot.rolling(window=window, min_periods=10).mean()
     result: Dict[str, Dict[Any, float]] = {}
     for symbol in ma.columns:
@@ -620,8 +630,8 @@ def compute_market_regime(
         first_date = recent_dates[0]
         last_date = recent_dates[-1]
 
-        first_prices = market_data[market_data["date"] == first_date].set_index("symbol")["close"]
-        last_prices = market_data[market_data["date"] == last_date].set_index("symbol")["close"]
+        first_prices = market_data[market_data["date"] == first_date].groupby("symbol")["close"].last()
+        last_prices = market_data[market_data["date"] == last_date].groupby("symbol")["close"].last()
 
         common = first_prices.index.intersection(last_prices.index)
         if len(common) < 20:
@@ -651,7 +661,7 @@ def build_market_return_cache(
     lookback: int = 60,
 ) -> Dict[pd.Timestamp, float]:
     """Precompute median market return over the rolling lookback window."""
-    close_pivot = prices_df.pivot(index="date", columns="symbol", values="close").sort_index()
+    close_pivot = build_close_pivot(prices_df)
     shifted = close_pivot.shift(lookback - 1)
     returns = close_pivot / shifted - 1.0
     medians = returns.median(axis=1, skipna=True)
@@ -2034,6 +2044,24 @@ def run_backtest(
 
     if signal_types is None:
         signal_types = ["volume", "quality"]
+    signal_types = [str(signal_type).strip() for signal_type in signal_types if str(signal_type).strip()]
+    unavailable_signals = sorted(
+        set(signal_types).intersection(
+            {
+                "lead_lag",
+                "earnings_drift",
+                "informed_trading",
+                "broker_flow",
+                "smart_money",
+                "smart_money_pure",
+            }
+        )
+    )
+    if unavailable_signals:
+        logger.warning(
+            "Skipping signal types not included in the public release: %s",
+            ", ".join(unavailable_signals),
+        )
 
     logger.info("Loading price data...")
     conn = sqlite3.connect(str(get_db_path()))
@@ -2074,7 +2102,7 @@ def run_backtest(
     broker_exit_lookup: Dict[tuple, tuple] = {}
     if use_broker_exit:
         try:
-            _bex_conn = sqlite3.connect(str(DB_PATH))
+            _bex_conn = sqlite3.connect(str(get_db_path()))
             _bex_df = pd.read_sql(
                 "SELECT symbol, as_of_date, circular_score, pump_score "
                 "FROM broker_signals_v2",
@@ -2191,7 +2219,7 @@ def run_backtest(
             if regime_adaptive_hold:
                 _default_hold = {"bull": holding_days, "neutral": max(10, holding_days // 2), "bear": max(5, holding_days // 4)}
                 _rhold = regime_hold_days if regime_hold_days else _default_hold
-                trade_max_hold = _rhold.get(regime, holding_days)
+                trade_max_hold = _rhold.get(current_regime, holding_days)
             else:
                 trade_max_hold = holding_days
 
@@ -2267,7 +2295,7 @@ def run_backtest(
 
             # Check holding period (in trading days) — use close price for planned exit
             # This fires independently of trailing stop state
-            if exit_reason is None and trading_days_held >= holding_days:
+            if exit_reason is None and trading_days_held >= trade.max_holding_days:
                 exit_reason = "holding_period"
                 close_price = get_price_at_date(prices_df, symbol, current_date,
                                                 look_forward_days=0, use_open=False)

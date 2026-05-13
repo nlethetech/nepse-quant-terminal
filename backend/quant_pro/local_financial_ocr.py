@@ -13,10 +13,18 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-import fitz
 import numpy as np
-import pytesseract
 from PIL import Image, ImageOps
+
+try:
+    import fitz
+except Exception:  # pragma: no cover - import guard for environments without PyMuPDF
+    fitz = None
+
+try:
+    import pytesseract
+except Exception:  # pragma: no cover - import guard for environments without pytesseract
+    pytesseract = None
 
 try:
     import cv2
@@ -210,6 +218,8 @@ def _select_field_value(field: str, numbers: list[float]) -> float | None:
 def _render_pages(path: Path, max_pages: int = 2) -> list[Image.Image]:
     suffix = path.suffix.lower()
     if suffix == ".pdf":
+        if fitz is None:
+            raise RuntimeError("PyMuPDF is required to render PDF filings for local OCR extraction")
         doc = fitz.open(path)
         pages = []
         for idx in range(min(max_pages, len(doc))):
@@ -273,6 +283,8 @@ def _ocr_image(
     config: str,
 ) -> str:
     pil = image if isinstance(image, Image.Image) else Image.fromarray(image)
+    if pytesseract is None:
+        raise RuntimeError("pytesseract is required for local OCR extraction")
     return pytesseract.image_to_string(pil, lang=lang, config=config)
 
 
