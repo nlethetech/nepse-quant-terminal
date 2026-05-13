@@ -207,6 +207,17 @@ Register it in the `SIGNAL_MAP` dict inside `run_backtest()` and add `"my_signal
 
 ## Setup
 
+### Easy launch for nontechnical users
+
+After downloading or cloning the repo, use the double-click launcher for your OS:
+
+- macOS: `Nepse Quant Terminal.app` or `Launch Quant Terminal.command`
+- Windows: `Launch Quant Terminal.bat`
+
+The launcher creates `.venv`, installs dependencies, downloads the bundled market database if missing, runs preflight, and starts the TUI.
+
+See [`docs/EASY_LAUNCH.md`](docs/EASY_LAUNCH.md) for troubleshooting notes and macOS security prompt handling.
+
 ### Requirements
 
 - Python 3.10–3.13 (recommended: 3.12) — Python 3.14+ is **not yet supported** (numba and the nepse package both cap at `<3.14`)

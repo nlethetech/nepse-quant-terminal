@@ -1,0 +1,20 @@
+#!/bin/sh
+set -u
+
+MACOS_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$MACOS_DIR/../../.." && pwd)
+
+if [ ! -f "$REPO_ROOT/Launch Quant Terminal.command" ]; then
+    osascript -e 'display dialog "Keep Nepse Quant Terminal.app inside the nepse-quant-terminal repo folder, then open it again." buttons {"OK"} default button "OK" with title "NEPSE Quant Terminal"'
+    exit 1
+fi
+
+escaped_repo=$(printf '%s' "$REPO_ROOT" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+osascript <<APPLESCRIPT
+set repoPath to "$escaped_repo"
+tell application "Terminal"
+    activate
+    do script "cd " & quoted form of repoPath & " && sh " & quoted form of (repoPath & "/Launch Quant Terminal.command")
+end tell
+APPLESCRIPT
