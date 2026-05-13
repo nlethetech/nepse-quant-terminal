@@ -24,7 +24,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import numpy as np
@@ -2028,6 +2028,7 @@ def run_backtest(
     regime_hold_days: Optional[Dict[str, int]] = None,
     regime_sector_limits: Optional[Dict[str, float]] = None,
     use_broker_exit: bool = False,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> BacktestResult:
     """
     Run walk-forward portfolio backtest with realistic capital tracking.
@@ -2041,6 +2042,16 @@ def run_backtest(
     """
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    def _emit_progress(payload: Dict[str, Any]) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(payload)
+        except Exception:
+            logger.debug("Backtest progress callback failed", exc_info=True)
+
+    _emit_progress({"phase": "loading", "progress_pct": 0, "message": "Loading price data"})
 
     if signal_types is None:
         signal_types = ["volume", "quality"]
@@ -2132,6 +2143,16 @@ def run_backtest(
         return BacktestResult([], start, end, holding_days, initial_capital, [])
 
     logger.info(f"Testing on {len(trading_dates)} trading days")
+    total_days = len(trading_dates)
+    _emit_progress(
+        {
+            "phase": "running",
+            "progress_pct": 0,
+            "current": 0,
+            "total": total_days,
+            "message": f"Testing {total_days} trading days",
+        }
+    )
 
     # Build close price lookup for fast NAV computation
     close_lookup = build_close_lookup(prices_df)
@@ -2148,6 +2169,7 @@ def run_backtest(
     last_signal_date = None
     current_regime = "neutral"  # Tracks last-known regime for STEP 1 use
 
+    progress_step = max(1, len(trading_dates) // 100)
     for i, current_date in enumerate(trading_dates):
         current_date = pd.Timestamp(current_date)
 
@@ -2588,8 +2610,22 @@ def run_backtest(
             logger.info(f"Processed {i}/{len(trading_dates)} days, "
                         f"{len(completed_trades)} trades, "
                         f"NAV: NPR {nav:,.0f}")
+        if i == 0 or i == len(trading_dates) - 1 or i % progress_step == 0:
+            _emit_progress(
+                {
+                    "phase": "running",
+                    "progress_pct": int(round(((i + 1) / len(trading_dates)) * 100)),
+                    "current": i + 1,
+                    "total": len(trading_dates),
+                    "date": current_date.strftime("%Y-%m-%d"),
+                    "trades": len(completed_trades),
+                    "nav": float(nav),
+                    "message": f"{i + 1}/{len(trading_dates)} days",
+                }
+            )
 
     # Close remaining positions at last available price
+    _emit_progress({"phase": "finalizing", "progress_pct": 100, "message": "Finalizing positions"})
     for symbol, trade in current_positions.items():
         exit_fill = get_price_on_or_before_date(prices_df, symbol, end)
         if exit_fill:
