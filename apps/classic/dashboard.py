@@ -186,6 +186,7 @@ class MD:
                 lat = pd.DataFrame(columns=["symbol", "open", "high", "low", "close", "volume"])
 
             lat = lat[lat["symbol"] != "NEPSE"].copy()
+            lat = lat.drop_duplicates("symbol", keep="last")
             if not quotes.empty:
                 quote_fallback = quotes.rename(
                     columns={"ltp": "quote_ltp", "prev_close": "quote_prev", "vol": "quote_vol"}
@@ -216,10 +217,12 @@ class MD:
                 prv = pd.read_sql_query(
                     "SELECT symbol,close prev FROM stock_prices WHERE date=?",
                     c, params=(prv_d,))
+                prv = prv.drop_duplicates("symbol", keep="last")
                 df = df.merge(prv, on="symbol", how="left")
             else:
                 df["prev"] = pd.NA
 
+            df = df.drop_duplicates("symbol", keep="last")
             for col in ("open", "high", "low", "close", "volume", "quote_ltp", "quote_prev", "quote_vol", "prev"):
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
