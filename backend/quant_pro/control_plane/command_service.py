@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 from dataclasses import asdict
 from datetime import timedelta
 from typing import Any, Callable, Dict, Optional
@@ -22,6 +23,7 @@ from backend.quant_pro.tms_models import (
     utc_now_iso,
 )
 from backend.quant_pro.vendor_api import fetch_latest_ltp
+from backend.quant_pro.paths import get_runtime_dir
 
 from .decision_journal import (
     create_approval_request,
@@ -61,6 +63,7 @@ class ControlPlaneCommandService:
         live_service: Any | None = None,
         mode: TradingMode = TradingMode.PAPER,
         paper_submitter: Optional[Callable[[str, str, int, float], tuple[bool, str, Dict[str, Any]]]] = None,
+        paper_execution_service: Any | None = None,
         watchlist_fetcher: Optional[Callable[[], Dict[str, Any]]] = None,
         watchlist_adder: Optional[Callable[[str], Dict[str, Any]]] = None,
         watchlist_remover: Optional[Callable[[str], Dict[str, Any]]] = None,
@@ -73,6 +76,7 @@ class ControlPlaneCommandService:
         self.live_service = live_service
         self.mode = _normalize_mode(str(mode))
         self.paper_submitter = paper_submitter
+        self.paper_execution_service = paper_execution_service
         self.watchlist_fetcher = watchlist_fetcher
         self.watchlist_adder = watchlist_adder
         self.watchlist_remover = watchlist_remover
@@ -212,6 +216,34 @@ class ControlPlaneCommandService:
         if self.paper_submitter is not None:
             ok, msg, payload = self.paper_submitter(str(action).upper(), str(symbol).upper(), int(quantity), float(limit_price))
             return CommandResult(ok, "submitted" if ok else "failed", msg, mode, payload=payload)
+        if self.paper_execution_service is not None:
+            source = self.service_label or "control_plane"
+            result = self.paper_execution_service.submit_order(
+                getattr(self.paper_execution_service, "account_id", "account_1"),
+                str(action).upper(),
+                str(symbol).upper(),
+                int(quantity),
+                float(limit_price),
+                source,
+                thesis or "manual_paper",
+                slippage_pct=float(slippage_pct if slippage_pct is not None else 2.0),
+            )
+            quote_price = None
+            try:
+                quote_price = fetch_latest_ltp(str(symbol).upper())
+            except Exception:
+                quote_price = None
+            if quote_price:
+                match = self.paper_execution_service.match_open_orders(
+                    getattr(self.paper_execution_service, "account_id", "account_1"),
+                    {str(symbol).upper(): {"ltp": float(quote_price), "source": "control_plane_latest_ltp", "age_seconds": 0}},
+                )
+            else:
+                match = None
+            payload = {"order": result.order.to_record() if result.order else None}
+            if match is not None:
+                payload["fills"] = [order.to_record() for order in match.filled_orders]
+            return CommandResult(result.ok, "submitted" if result.ok else "rejected", result.message, mode, payload=payload)
         if self.trader is None:
             return CommandResult(False, "unsupported", "Paper execution unavailable", mode)
         return self._submit_paper_via_trader(str(action).lower(), str(symbol).upper(), int(quantity), float(limit_price))
@@ -452,14 +484,25 @@ class ControlPlaneCommandService:
 
 
 def build_live_trader_control_plane(trader: Any) -> ControlPlaneCommandService:
+    from backend.trading.paper_execution import PaperExecutionService
+
     cached = getattr(trader, "_control_plane_service", None)
     if cached is not None:
         cached.live_service = None
         return cached
+    account_id = os.environ.get("NEPSE_ACTIVE_ACCOUNT_ID", "account_1")
+    paper_service = PaperExecutionService(
+        account_id,
+        account_dir=Path(getattr(trader, "portfolio_file", "") or ".").expanduser().parent,
+        initial_capital=float(getattr(trader, "capital", 1_000_000.0) or 1_000_000.0),
+        max_positions=int(getattr(trader, "max_positions", 5) or 5),
+        sector_limit=float(getattr(trader, "sector_limit", 0.35) or 0.35),
+    )
     service = ControlPlaneCommandService(
         trader=trader,
         live_service=None,
         mode=TradingMode.PAPER,
+        paper_execution_service=paper_service,
         service_label="live_trader",
     )
     setattr(trader, "_control_plane_service", service)
@@ -486,6 +529,7 @@ def build_tui_control_plane(dashboard: Any) -> ControlPlaneCommandService:
     service.live_service = None
     service.mode = TradingMode.PAPER
     service.paper_submitter = _paper_submitter
+    service.paper_execution_service = None
     service.watchlist_fetcher = None
     service.watchlist_adder = None
     service.watchlist_remover = None
@@ -497,6 +541,7 @@ def build_tui_control_plane(dashboard: Any) -> ControlPlaneCommandService:
 def build_env_live_trader_control_plane() -> ControlPlaneCommandService:
     from backend.quant_pro.config import DEFAULT_CAPITAL
     from backend.trading.live_trader import DEFAULT_PAPER_PORTFOLIO, LiveTrader
+    from backend.trading.paper_execution import PaperExecutionService
 
     paper_portfolio = str(os.environ.get("NEPSE_MCP_PAPER_PORTFOLIO", "")).strip() or str(DEFAULT_PAPER_PORTFOLIO)
 
@@ -512,7 +557,14 @@ def build_env_live_trader_control_plane() -> ControlPlaneCommandService:
         paper_portfolio=paper_portfolio,
     )
     trader = LiveTrader(args)
-    return build_live_trader_control_plane(trader)
+    service = build_live_trader_control_plane(trader)
+    account_id = os.environ.get("NEPSE_MCP_ACCOUNT_ID", os.environ.get("NEPSE_ACTIVE_ACCOUNT_ID", "account_1"))
+    service.paper_execution_service = PaperExecutionService(
+        account_id,
+        account_dir=Path(get_runtime_dir(__file__)) / "accounts" / account_id,
+        initial_capital=float(os.environ.get("NEPSE_MCP_CAPITAL", DEFAULT_CAPITAL)),
+    )
+    return service
 
 
 def _normalize_mode(mode: str) -> TradingMode:

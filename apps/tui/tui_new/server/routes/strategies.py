@@ -1,6 +1,8 @@
 """Strategy configuration and backtesting endpoints."""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Request
 
 router = APIRouter()
@@ -8,45 +10,39 @@ router = APIRouter()
 
 @router.get("")
 async def get_strategies(request: Request):
-    # TODO: integrate with strategy registry
     try:
-        from configs.long_term import LONG_TERM_CONFIG
-        from configs.short_term import SHORT_TERM_CONFIG
-        return [
-            {
-                "name": "Long-Term (C31)",
-                "description": "Main quantitative strategy with regime-dependent sector limits",
-                "signal_types": LONG_TERM_CONFIG.get("signal_types", []),
-                "holding_days": LONG_TERM_CONFIG.get("holding_days", 40),
-                "max_positions": LONG_TERM_CONFIG.get("max_positions", 5),
-                "stop_loss_pct": LONG_TERM_CONFIG.get("stop_loss_pct", 8),
-                "trailing_stop_pct": LONG_TERM_CONFIG.get("trailing_stop_pct", 10),
-                "sector_limit": LONG_TERM_CONFIG.get("sector_limit", 0.5),
-            },
-            {
-                "name": "Short-Term (Dividend)",
-                "description": "Event-driven corporate action strategy",
-                "signal_types": SHORT_TERM_CONFIG.get("signal_types", []),
-                "holding_days": SHORT_TERM_CONFIG.get("holding_days", 12),
-                "max_positions": SHORT_TERM_CONFIG.get("max_positions", 3),
-                "stop_loss_pct": SHORT_TERM_CONFIG.get("stop_loss_pct", 6),
-                "trailing_stop_pct": SHORT_TERM_CONFIG.get("trailing_stop_pct", 0),
-                "sector_limit": SHORT_TERM_CONFIG.get("sector_limit", 1.0),
-            },
-        ]
-    except Exception:
-        return []
+        from backend.trading import strategy_registry
+
+        return strategy_registry.list_strategies()
+    except Exception as exc:
+        return {"error": str(exc), "strategies": []}
 
 
 @router.post("/backtest")
 async def run_backtest(request: Request):
-    # TODO: integrate with backtesting engine
-    return {
-        "total_return": 0,
-        "sharpe_ratio": 0,
-        "max_drawdown": 0,
-        "win_rate": 0,
-        "total_trades": 0,
-        "start_date": "",
-        "end_date": "",
-    }
+    try:
+        from backend.trading import strategy_registry
+
+        body = await request.json()
+        strategy_id = str(body.get("strategy_id") or body.get("id") or "").strip()
+        strategy = strategy_registry.load_strategy(strategy_id) if strategy_id else None
+        if strategy is None and isinstance(body.get("strategy"), dict):
+            strategy = body["strategy"]
+        if strategy is None:
+            return {"error": "strategy not found"}
+
+        start_date = str(body.get("start_date") or body.get("start") or "").strip()
+        end_date = str(body.get("end_date") or body.get("end") or "").strip()
+        if not start_date or not end_date:
+            return {"error": "start_date and end_date are required"}
+
+        capital = float(body.get("capital") or body.get("initial_capital") or 1_000_000)
+        return await asyncio.to_thread(
+            strategy_registry.run_strategy_backtest,
+            strategy,
+            start_date=start_date,
+            end_date=end_date,
+            capital=capital,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}

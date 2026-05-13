@@ -210,7 +210,7 @@ Register it in the `SIGNAL_MAP` dict inside `run_backtest()` and add `"my_signal
 ### Requirements
 
 - Python 3.10–3.13 (recommended: 3.12) — Python 3.14+ is **not yet supported** (numba and the nepse package both cap at `<3.14`)
-- macOS or Linux (Windows: WSL recommended)
+- macOS, Linux, or native Windows PowerShell. WSL/container remains useful for scheduled production-style runs, but is not required for dashboard, backtests, or paper autopilot.
 
 ### Installation
 
@@ -218,6 +218,18 @@ Register it in the `SIGNAL_MAP` dict inside `run_backtest()` and add `"my_signal
 git clone https://github.com/nlethetech/nepse-quant-terminal
 cd nepse-quant-terminal
 pip install -r requirements.txt
+```
+
+Native Windows PowerShell:
+
+```powershell
+git clone https://github.com/nlethetech/nepse-quant-terminal
+cd nepse-quant-terminal
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -r requirements.txt
+python -m scripts.ops.windows_preflight
 ```
 
 ### Database
@@ -250,6 +262,14 @@ python scripts/ingestion/deterministic_daily_ingestion.py
 ```bash
 python -m apps.tui.dashboard_tui
 ```
+
+On Windows PowerShell, run the same command after activating `.venv`:
+
+```powershell
+python -m apps.tui.dashboard_tui
+```
+
+Paper strategy autopilot is broker-free. Manual orders and strategy orders use the same account-scoped paper execution service, fill from latest market quotes, write visible rejected/filled order history, and persist the canonical files under `data/runtime/accounts/account_N/`.
 
 ---
 

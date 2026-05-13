@@ -3,11 +3,13 @@ from __future__ import annotations
 import copy
 import json
 import re
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from configs.long_term import LONG_TERM_CONFIG
+from backend.quant_pro.database import get_db_path
 from backend.quant_pro.paths import ensure_dir, get_project_root
 
 PROJECT_ROOT = get_project_root(__file__)
@@ -170,23 +172,105 @@ def save_custom_strategy(payload: Dict[str, Any], *, strategy_id: Optional[str] 
     return load_strategy(sid) or record
 
 
-def run_strategy_backtest(strategy: Dict[str, Any], *, start_date: str, end_date: str, capital: float) -> Dict[str, Any]:
-    import run_live_trader_temp_forward_experiments as temp_runner
-    from backend.backtesting.simple_backtest import run_backtest
+def _pct(value: float) -> float:
+    return round(float(value) * 100.0, 4)
 
-    temp_runner._build_fast_signal_patches()
-    temp_runner._patch_ranker()
-    temp_runner.RANKING_OVERLAY = dict(strategy.get("ranking_overlay") or {"mode": "baseline"})
+
+def _daily_nav_payload(result: Any) -> List[List[Any]]:
+    rows: List[List[Any]] = []
+    for date_value, nav in list(getattr(result, "daily_nav", []) or []):
+        if hasattr(date_value, "strftime"):
+            date_out = date_value.strftime("%Y-%m-%d")
+        else:
+            date_out = str(date_value)[:10]
+        rows.append([date_out, float(nav)])
+    return rows
+
+
+def _summarize_backtest_result(strategy_id: str, description: str, result: Any) -> Dict[str, Any]:
+    final_nav = (
+        float(result.daily_nav[-1][1])
+        if getattr(result, "daily_nav", None)
+        else float(getattr(result, "initial_capital", 0.0) or 0.0)
+    )
+    return {
+        "id": str(strategy_id),
+        "description": str(description),
+        "total_return_pct": _pct(getattr(result, "total_return", 0.0)),
+        "annualized_return_pct": _pct(getattr(result, "annualized_return", 0.0)),
+        "volatility_pct": _pct(getattr(result, "volatility", 0.0)),
+        "sharpe": round(float(getattr(result, "sharpe_ratio", 0.0) or 0.0), 4),
+        "sortino": round(float(getattr(result, "sortino_ratio", 0.0) or 0.0), 4),
+        "max_drawdown_pct": _pct(getattr(result, "max_drawdown", 0.0)),
+        "max_drawdown_duration": int(getattr(result, "max_drawdown_duration", 0) or 0),
+        "calmar": round(float(getattr(result, "calmar_ratio", 0.0) or 0.0), 4),
+        "total_trades": int(getattr(result, "total_trades", 0) or 0),
+        "win_rate_pct": _pct(getattr(result, "win_rate", 0.0)),
+        "avg_win_pct": _pct(getattr(result, "avg_win", 0.0)),
+        "avg_loss_pct": _pct(getattr(result, "avg_loss", 0.0)),
+        "profit_factor": round(float(getattr(result, "profit_factor", 0.0) or 0.0), 4),
+        "max_consecutive_losses": int(getattr(result, "max_consecutive_losses", 0) or 0),
+        "avg_holding_days": round(float(getattr(result, "avg_holding_days", 0.0) or 0.0), 2),
+        "total_pnl": round(float(getattr(result, "total_pnl", 0.0) or 0.0), 2),
+        "total_fees_paid": round(float(getattr(result, "total_fees_paid", 0.0) or 0.0), 2),
+        "final_nav": round(final_nav, 2),
+        "by_signal_type": getattr(result, "by_signal_type", lambda: {})(),
+        "by_exit_reason": getattr(result, "by_exit_reason", lambda: {})(),
+        "daily_nav": _daily_nav_payload(result),
+    }
+
+
+def _nepse_return(start_date: str, end_date: str) -> Dict[str, Any]:
+    conn = sqlite3.connect(str(get_db_path()))
+    try:
+        rows = conn.execute(
+            """
+            SELECT date, close
+            FROM stock_prices
+            WHERE symbol = 'NEPSE'
+              AND date BETWEEN ? AND ?
+            ORDER BY date
+            """,
+            (str(start_date), str(end_date)),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if len(rows) < 2:
+        return {
+            "start": str(start_date),
+            "end": str(end_date),
+            "start_close": None,
+            "end_close": None,
+            "return_pct": 0.0,
+        }
+
+    start_row = rows[0]
+    end_row = rows[-1]
+    start_close = float(start_row[1])
+    end_close = float(end_row[1])
+    return_pct = ((end_close / start_close) - 1.0) * 100.0 if start_close > 0 else 0.0
+    return {
+        "start": str(start_row[0])[:10],
+        "end": str(end_row[0])[:10],
+        "start_close": round(start_close, 4),
+        "end_close": round(end_close, 4),
+        "return_pct": round(return_pct, 4),
+    }
+
+
+def run_strategy_backtest(strategy: Dict[str, Any], *, start_date: str, end_date: str, capital: float) -> Dict[str, Any]:
+    from backend.backtesting.simple_backtest import run_backtest
 
     config = copy.deepcopy(strategy.get("config") or {})
     config["initial_capital"] = float(capital)
     result = run_backtest(start_date=start_date, end_date=end_date, **config)
-    summary = temp_runner._summarize_result(
+    summary = _summarize_backtest_result(
         str(strategy.get("id") or "strategy"),
         str(strategy.get("description") or strategy.get("name") or "Strategy backtest"),
         result,
     )
-    nepse = temp_runner._nepse_return(start_date, end_date)
+    nepse = _nepse_return(start_date, end_date)
     summary["vs_nepse_pct_points"] = round(float(summary["total_return_pct"]) - float(nepse.get("return_pct") or 0.0), 4)
 
     payload = {

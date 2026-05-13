@@ -15,6 +15,18 @@ router = APIRouter()
 _signals_cache: dict = {"data": None, "ts": None, "date": None}
 
 
+def _signal_to_dict(signal, signal_type: str, date: str) -> dict:
+    return {
+        "symbol": str(getattr(signal, "symbol", "")),
+        "signal_type": signal_type,
+        "score": float(getattr(signal, "score", 0.0) or 0.0),
+        "strength": float(getattr(signal, "strength", 0.0) or 0.0),
+        "confidence": float(getattr(signal, "confidence", 0.0) or 0.0),
+        "reasoning": str(getattr(signal, "reasoning", "")),
+        "date": date,
+    }
+
+
 @router.get("")
 async def get_signals(request: Request):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -24,9 +36,9 @@ async def get_signals(request: Request):
         return _signals_cache["data"]
 
     try:
-        from configs.long_term import LONG_TERM_CONFIG
         from backend.backtesting.simple_backtest import (
-            generate_volume_signals_at_date,
+            build_symbol_price_cache,
+            generate_volume_breakout_signals_at_date,
             generate_quality_signals_at_date,
         )
 
@@ -35,38 +47,34 @@ async def get_signals(request: Request):
             "SELECT symbol, date, open, high, low, close, volume "
             "FROM stock_prices WHERE symbol != 'NEPSE' ORDER BY date",
             conn,
+            parse_dates=["date"],
         )
         conn.close()
+        symbol_cache = build_symbol_price_cache(prices)
 
         signals_out = []
 
         # Generate volume signals
         try:
-            vol_sigs = generate_volume_signals_at_date(prices, date=today)
+            vol_sigs = generate_volume_breakout_signals_at_date(
+                prices,
+                date=pd.Timestamp(today),
+                symbol_cache=symbol_cache,
+            )
             for s in (vol_sigs or []):
-                signals_out.append({
-                    "symbol": s.get("symbol", ""),
-                    "signal_type": "volume",
-                    "score": float(s.get("score", 0)),
-                    "strength": float(s.get("strength", 0)),
-                    "confidence": float(s.get("confidence", 0)),
-                    "date": today,
-                })
+                signals_out.append(_signal_to_dict(s, "volume", today))
         except Exception:
             pass
 
         # Generate quality signals
         try:
-            qual_sigs = generate_quality_signals_at_date(prices, date=today)
+            qual_sigs = generate_quality_signals_at_date(
+                prices,
+                date=pd.Timestamp(today),
+                symbol_cache=symbol_cache,
+            )
             for s in (qual_sigs or []):
-                signals_out.append({
-                    "symbol": s.get("symbol", ""),
-                    "signal_type": "quality",
-                    "score": float(s.get("score", 0)),
-                    "strength": float(s.get("strength", 0)),
-                    "confidence": float(s.get("confidence", 0)),
-                    "date": today,
-                })
+                signals_out.append(_signal_to_dict(s, "quality", today))
         except Exception:
             pass
 
