@@ -68,6 +68,22 @@ def test_paper_execution_rejects_duplicate_open_order_visibly(tmp_path, monkeypa
     assert any(row["status"] == "REJECTED" for row in state["order_history"])
 
 
+def test_paper_execution_rejects_suspended_symbol_visibly(tmp_path, monkeypatch):
+    monkeypatch.setattr("backend.trading.paper_execution.current_nepal_datetime", _fixed_nst)
+    service = PaperExecutionService("account_1", account_dir=tmp_path, max_order_notional=500_000)
+
+    result = service.submit_order("account_1", "BUY", "UIC", 100, 100.0, "strategy_paper", "volume")
+    state = service.get_account_execution_state("account_1")
+
+    assert not result.ok
+    assert result.risk_result["reason"] == "blocked_symbol"
+    assert result.risk_result["detail"] == "suspended_or_non_tradeable_symbol"
+    assert "Blocked symbol UIC" in result.message
+    assert not state["open_orders"]
+    assert state["order_history"][0]["status"] == "REJECTED"
+    assert state["order_history"][0]["symbol"] == "UIC"
+
+
 def test_paper_execution_migrates_legacy_tui_trade_log_without_duplicates(tmp_path):
     pd.DataFrame(columns=PORTFOLIO_COLS).to_csv(tmp_path / "paper_portfolio.csv", index=False)
     legacy_trade = pd.DataFrame(
@@ -127,6 +143,36 @@ def test_tui_trading_engine_autopilot_writes_canonical_account_ledger(tmp_path, 
     assert trades.loc[0, "Reason"] == "volume"
     assert (tmp_path / "strategy_runs" / "run-1.json").exists()
     assert any("BUY NABIL" in event for event in events)
+
+
+def test_tui_trading_engine_blocks_suspended_autopilot_signal(tmp_path, monkeypatch):
+    monkeypatch.setattr("backend.trading.paper_execution.current_nepal_datetime", _fixed_nst)
+    monkeypatch.setattr("backend.trading.tui_trading_engine.now_nst", _fixed_nst)
+    monkeypatch.setattr("backend.trading.tui_trading_engine.fetch_prices_for_symbols", lambda symbols: {sym: 100.0 for sym in symbols})
+
+    events = []
+    engine = TUITradingEngine(
+        capital=1_000_000,
+        signal_types=["volume"],
+        max_positions=5,
+        holding_days=40,
+        sector_limit=0.35,
+        portfolio_file=tmp_path / "paper_portfolio.csv",
+        trade_log_file=tmp_path / "paper_trade_log.csv",
+        nav_log_file=tmp_path / "paper_nav_log.csv",
+        state_file=tmp_path / "paper_state.json",
+        account_id="account_1",
+        strategy_id="s1",
+        strategy_config={"id": "s1"},
+        on_activity=events.append,
+    )
+
+    engine._active_run_id = "run-1"
+    engine._execute_buys([{"symbol": "KRBL", "signal_type": "volume", "agent_reason": "", "score": 0.9}])
+
+    assert pd.read_csv(tmp_path / "paper_portfolio.csv").empty
+    assert pd.read_csv(tmp_path / "paper_trade_log.csv").empty
+    assert any("BLOCK KRBL: suspended_or_non_tradeable_symbol" in event for event in events)
 
 
 def test_tui_trading_engine_passes_risk_thresholds_to_exit_check(tmp_path, monkeypatch):

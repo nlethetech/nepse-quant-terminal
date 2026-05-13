@@ -38,7 +38,7 @@ from backend.quant_pro.alpha_practical import (
 from backend.quant_pro.sectors import SECTOR_GROUPS
 from backend.quant_pro.database import get_db_path
 from backend.quant_pro.event_layer import load_event_adjustment_context
-from backend.quant_pro.signal_ranking import rank_signal_candidates
+from backend.quant_pro.signal_ranking import is_tradeable_signal_symbol, rank_signal_candidates
 
 # Agent 3 signal imports (Citadel upgrade)
 from backend.quant_pro.disposition import generate_cgo_signals_at_date
@@ -1195,9 +1195,9 @@ def compute_liquid_universe(
     This should be applied BEFORE signal computation to reduce noise
     from illiquid names in the ranking.
     """
-    # Exclude non-tradable symbols (market index, sector indices)
+    # Exclude non-tradable symbols (market index, sector indices, suspended names)
     all_symbols = prices_df["symbol"].unique()
-    symbols = [s for s in all_symbols if s != "NEPSE" and not str(s).startswith("SECTOR::")]
+    symbols = [s for s in all_symbols if is_tradeable_signal_symbol(s)]
     turnover_map = {}
 
     for symbol in symbols:
@@ -1448,8 +1448,8 @@ def generate_52wk_high_signals_at_date(
     symbols = liquid_symbols if liquid_symbols else prices_df["symbol"].unique()
 
     for symbol in symbols:
-        # Skip index entries
-        if symbol == "NEPSE" or str(symbol).startswith("SECTOR::"):
+        # Skip index entries and suspended/non-tradeable symbols.
+        if not is_tradeable_signal_symbol(symbol):
             continue
 
         sym_df = prices_df[
@@ -1540,7 +1540,7 @@ def generate_value_bounce_signals_at_date(
     symbols = liquid_symbols if liquid_symbols else prices_df["symbol"].unique()
 
     for symbol in symbols:
-        if symbol == "NEPSE" or str(symbol).startswith("SECTOR::"):
+        if not is_tradeable_signal_symbol(symbol):
             continue
 
         sym_df = prices_df[
@@ -1665,8 +1665,8 @@ def generate_residual_momentum_signals_at_date(
     residual_scores = {}
 
     for symbol in symbols:
-        # Skip index entries
-        if symbol == "NEPSE" or str(symbol).startswith("SECTOR::"):
+        # Skip index entries and suspended/non-tradeable symbols.
+        if not is_tradeable_signal_symbol(symbol):
             continue
 
         sym_df = prices_df[
