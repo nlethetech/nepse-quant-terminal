@@ -32,6 +32,7 @@ else:
 import pandas as pd
 
 from backend.backtesting.simple_backtest import get_symbol_sector
+from backend.quant_pro.signal_ranking import blocked_signal_symbol_reason, canonicalize_signal_symbol
 from backend.quant_pro.nepse_calendar import current_nepal_datetime
 from backend.quant_pro.paths import ensure_dir, get_runtime_dir
 from backend.trading.live_trader import (
@@ -456,6 +457,9 @@ class PaperExecutionService:
 
         if state.get("manual_halt"):
             return {"ok": False, "reason": "manual_halt"}
+        symbol_block = blocked_signal_symbol_reason(symbol)
+        if symbol_block:
+            return {"ok": False, "reason": "blocked_symbol", "detail": symbol_block, "symbol": symbol}
         if quote_age_seconds is not None and quote_age_seconds > self.max_quote_age_seconds:
             return {"ok": False, "reason": "stale_quote", "quote_age_seconds": quote_age_seconds}
         if quantity <= 0 or limit_price <= 0:
@@ -559,9 +563,28 @@ class PaperExecutionService:
             return PaperExecutionResult(False, "rejected", f"Unknown account {account_id}")
 
         action_text = str(action or "").upper()
-        sym = str(symbol or "").upper()
+        sym = canonicalize_signal_symbol(symbol)
         qty = int(quantity)
         price = float(limit_price)
+        risk = self._risk_check(action=action_text, symbol=sym, quantity=qty, limit_price=price)
+        if not risk.get("ok"):
+            rejected = self._visible_rejection(
+                action=action_text,
+                symbol=sym,
+                quantity=qty,
+                limit_price=price,
+                slippage_pct=slippage_pct,
+                source=source,
+                reason=reason,
+                strategy_id=str(strategy_id or self.strategy_id),
+                run_id=run_id,
+                risk_result=risk,
+            )
+            message = str(risk.get("reason") or "rejected")
+            if message == "blocked_symbol":
+                message = f"Blocked symbol {sym}: {risk.get('detail') or 'non_tradeable'}"
+            return PaperExecutionResult(False, "rejected", message, rejected, rejected_orders=[rejected], risk_result=risk)
+
         orders = self._load_orders()
         duplicate = any(
             order.status == "OPEN" and order.action == action_text and order.symbol == sym
@@ -582,22 +605,6 @@ class PaperExecutionService:
                 risk_result=risk,
             )
             return PaperExecutionResult(False, "rejected", "Duplicate open order", rejected, rejected_orders=[rejected], risk_result=risk)
-
-        risk = self._risk_check(action=action_text, symbol=sym, quantity=qty, limit_price=price)
-        if not risk.get("ok"):
-            rejected = self._visible_rejection(
-                action=action_text,
-                symbol=sym,
-                quantity=qty,
-                limit_price=price,
-                slippage_pct=slippage_pct,
-                source=source,
-                reason=reason,
-                strategy_id=str(strategy_id or self.strategy_id),
-                run_id=run_id,
-                risk_result=risk,
-            )
-            return PaperExecutionResult(False, "rejected", str(risk.get("reason") or "rejected"), rejected, rejected_orders=[rejected], risk_result=risk)
 
         ts = _now_stamp()
         order = PaperOrder(

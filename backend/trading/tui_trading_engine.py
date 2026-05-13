@@ -45,6 +45,7 @@ from backend.quant_pro.config import (
 )
 from backend.quant_pro.database import get_db_path
 from backend.quant_pro.nepse_calendar import is_trading_day
+from backend.quant_pro.signal_ranking import blocked_signal_symbol_reason, canonicalize_signal_symbol
 from backend.backtesting.simple_backtest import get_symbol_sector, load_all_prices
 from backend.trading.paper_execution import PaperExecutionService
 from validation.transaction_costs import TransactionCostModel as NepseFees
@@ -386,6 +387,18 @@ class TUITradingEngine:
                 use_regime_filter=True,
             )
             self.regime = regime
+            blocked = [
+                sig for sig in signals
+                if blocked_signal_symbol_reason(sig.get("symbol"))
+            ]
+            for sig in blocked:
+                symbol = canonicalize_signal_symbol(sig.get("symbol"))
+                self._log(f"BLOCK {symbol}: {blocked_signal_symbol_reason(symbol)}")
+            signals = [
+                {**sig, "symbol": canonicalize_signal_symbol(sig.get("symbol"))}
+                for sig in signals
+                if not blocked_signal_symbol_reason(sig.get("symbol"))
+            ]
             self.signals_today = signals
             self._active_run_id = f"{now_nst().strftime('%Y%m%d')}-{self.account_id}-{uuid.uuid4().hex[:8]}"
             self._paper_execution.start_strategy_manifest(
@@ -399,7 +412,7 @@ class TUITradingEngine:
                 },
                 signals=signals,
             )
-            self._log(f"{len(signals)} raw signals, regime={regime}")
+            self._log(f"{len(signals)} tradeable signals, regime={regime}")
         except Exception as e:
             self._log(f"Signal generation failed: {e}")
             self.signals_today = []
@@ -428,8 +441,17 @@ class TUITradingEngine:
             self._log("No position slots available")
             return
 
+        tradeable_signals: List[dict] = []
+        for sig in signals:
+            sym = canonicalize_signal_symbol(sig.get("symbol"))
+            block_reason = blocked_signal_symbol_reason(sym)
+            if block_reason:
+                self._log(f"BLOCK {sym}: {block_reason}")
+                continue
+            tradeable_signals.append({**sig, "symbol": sym})
+
         # Fetch LTPs for all candidate symbols
-        candidate_syms = [s["symbol"] for s in signals if s["symbol"] not in self.positions]
+        candidate_syms = [s["symbol"] for s in tradeable_signals if s["symbol"] not in self.positions]
         if not candidate_syms:
             return
 
@@ -438,7 +460,7 @@ class TUITradingEngine:
         per_position = self._compute_deployable_capital() / self.max_positions
         bought = 0
 
-        for sig in signals:
+        for sig in tradeable_signals:
             if bought >= available_slots:
                 break
 

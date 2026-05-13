@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
@@ -11,6 +12,9 @@ SYMBOL_ALIASES: Dict[str, str] = {
     "RHPC": "RIDI",
 }
 
+DEFAULT_BLOCKED_SIGNAL_SYMBOLS = frozenset({"KRBL", "UIC"})
+BLOCKED_SYMBOLS_ENV = "NEPSE_BLOCKED_SYMBOLS"
+
 
 def canonicalize_signal_symbol(symbol: Any) -> str:
     token = str(symbol or "").strip().upper()
@@ -19,15 +23,31 @@ def canonicalize_signal_symbol(symbol: Any) -> str:
     return SYMBOL_ALIASES.get(token, token)
 
 
-def is_tradeable_signal_symbol(symbol: Any) -> bool:
+def blocked_signal_symbols() -> set[str]:
+    symbols = set(DEFAULT_BLOCKED_SIGNAL_SYMBOLS)
+    raw = str(os.environ.get(BLOCKED_SYMBOLS_ENV, "") or "")
+    for token in raw.replace(";", ",").split(","):
+        symbol = canonicalize_signal_symbol(token)
+        if symbol:
+            symbols.add(symbol)
+    return symbols
+
+
+def blocked_signal_symbol_reason(symbol: Any) -> Optional[str]:
     token = canonicalize_signal_symbol(symbol)
     if not token:
-        return False
+        return "empty_symbol"
     if token == "NEPSE":
-        return False
+        return "market_index_not_tradeable"
     if token.startswith("SECTOR::"):
-        return False
-    return True
+        return "sector_index_not_tradeable"
+    if token in blocked_signal_symbols():
+        return "suspended_or_non_tradeable_symbol"
+    return None
+
+
+def is_tradeable_signal_symbol(symbol: Any) -> bool:
+    return blocked_signal_symbol_reason(symbol) is None
 
 
 def _base_signal_score(signal: Dict[str, Any]) -> float:
