@@ -321,7 +321,14 @@ The terminal defaults to:
 }
 ```
 
-To use a different Ollama model, edit `data/runtime/agents/active_agent.json` after first run:
+`data/runtime/agents/active_agent.json` is created automatically on first run. To use a different Ollama model, either use the Agents tab command box:
+
+```text
+/agent ollama gemma4:e2b
+```
+
+or edit `data/runtime/agents/active_agent.json`:
+
 ```json
 {
   "selected_preset": "ollama",
@@ -331,7 +338,11 @@ To use a different Ollama model, edit `data/runtime/agents/active_agent.json` af
 }
 ```
 
-Or switch from inside the TUI: **Agents tab → Agent Settings → enter model name**.
+You can also keep the current backend and only change its model:
+
+```text
+/model mistral
+```
 
 **Step 5 — Run the terminal**
 ```bash
@@ -351,7 +362,11 @@ pip install mlx-vlm
 # Model (~3 GB) downloads automatically on first use
 ```
 
-To use this backend, select the `gemma4_mlx` preset in the Agents tab or in `data/runtime/agents/active_agent.json`.
+To use this backend, run this in the Agents tab command box or set the same preset in `data/runtime/agents/active_agent.json`:
+
+```text
+/agent gemma4_mlx
+```
 
 ---
 
@@ -367,16 +382,25 @@ npm install -g @anthropic-ai/claude-code   # or via brew
 claude login
 ```
 
-Then set `active_agent.json` backend to `"claude"`, or switch from the TUI.
+Then set `active_agent.json` backend to `"claude"`, or switch from the TUI:
+
+```text
+/agent claude
+```
 
 ---
 
 ### Switching backends at runtime
 
-All three backends are hot-swappable without restarting the terminal. In the TUI:
+All three backends are hot-swappable without restarting the terminal. In the Agents tab chat box:
 
-```
-Agents tab → Agent Settings (gear icon) → select backend → Save
+```text
+/agent
+/agent list
+/agent ollama gemma4:e2b
+/agent gemma4_mlx
+/agent claude
+/model qwen2
 ```
 
 The setting persists to `data/runtime/agents/active_agent.json`.

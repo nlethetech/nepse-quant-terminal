@@ -91,6 +91,12 @@ def _default_active_agent_config() -> dict[str, Any]:
     return payload
 
 
+def _write_active_agent_config(payload: dict[str, Any]) -> dict[str, Any]:
+    ensure_dir(ACTIVE_AGENT_FILE.parent)
+    ACTIVE_AGENT_FILE.write_text(json.dumps(payload, indent=2, default=str))
+    return payload
+
+
 def _normalize_active_agent_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     payload = dict(raw or {})
     selected_preset = str(payload.get("selected_preset") or payload.get("backend") or DEFAULT_AGENT_PRESET).strip().lower()
@@ -114,19 +120,18 @@ def _normalize_active_agent_config(raw: dict[str, Any] | None) -> dict[str, Any]
 
 def load_active_agent_config() -> dict[str, Any]:
     if not ACTIVE_AGENT_FILE.exists():
-        return _default_active_agent_config()
+        return save_active_agent_config(_default_active_agent_config())
     try:
         payload = json.loads(ACTIVE_AGENT_FILE.read_text())
     except Exception:
-        return _default_active_agent_config()
+        return save_active_agent_config(_default_active_agent_config())
     return _normalize_active_agent_config(payload if isinstance(payload, dict) else {})
 
 
 def save_active_agent_config(config: dict[str, Any] | None) -> dict[str, Any]:
     normalized = _normalize_active_agent_config(config)
     normalized["updated_at"] = time.time()
-    ACTIVE_AGENT_FILE.write_text(json.dumps(normalized, indent=2, default=str))
-    return normalized
+    return _write_active_agent_config(normalized)
 
 
 def set_active_agent(

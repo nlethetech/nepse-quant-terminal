@@ -111,6 +111,12 @@ from backend.agents.agent_analyst import (
     load_agent_archive_history,
     load_agent_history,
 )
+from backend.agents.runtime_config import (
+    ACTIVE_AGENT_FILE,
+    list_agent_backends,
+    load_active_agent_config,
+    set_active_agent,
+)
 from backend.quant_pro.stock_report import build_stock_report
 from backend.trading.tui_trading_engine import TUITradingEngine
 from backend.trading.paper_execution import PaperExecutionService
@@ -293,6 +299,21 @@ def _watchlist_entry_key(item: dict) -> str:
     return str((item or {}).get("key") or "")
 
 
+def _dedupe_watchlist_entries(entries: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for item in entries or []:
+        normalized = _normalize_watchlist_entry(item)
+        if not normalized:
+            continue
+        key = _watchlist_entry_key(normalized)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+    return deduped
+
+
 def _build_sell_holdings_map(positions: list[dict] | None) -> dict[str, int]:
     holdings: dict[str, int] = {}
     for pos in positions or []:
@@ -337,15 +358,17 @@ def _load_watchlist() -> list[dict]:
         try:
             data = _json.loads(WATCHLIST_FILE.read_text())
             if isinstance(data, list) and data:
-                rows = [_normalize_watchlist_entry(item) for item in data]
-                return [row for row in rows if row]
+                rows = _dedupe_watchlist_entries(data)
+                if len(rows) != len(data):
+                    _save_watchlist(rows)
+                return rows
         except Exception:
             pass
-    return [_stock_watchlist_entry(sym) for sym in DEFAULT_WATCHLIST]
+    return _dedupe_watchlist_entries([_stock_watchlist_entry(sym) for sym in DEFAULT_WATCHLIST])
 
 def _save_watchlist(entries: list[dict]) -> None:
     ensure_dir(WATCHLIST_FILE.parent)
-    WATCHLIST_FILE.write_text(_json.dumps(entries, indent=2))
+    WATCHLIST_FILE.write_text(_json.dumps(_dedupe_watchlist_entries(entries), indent=2))
 
 
 def _ensure_csv_file(path: Path, columns: list[str]) -> None:
@@ -3594,7 +3617,7 @@ class NepseDashboard(App):
                             yield Static("COMPOSER", classes="panel-title", id="agent-compose-title")
                             with Vertical(id="agent-chat-footer"):
                                 yield Static("", id="agent-chat-hint")
-                                yield Input(id="agent-input", placeholder="Ask the agent...  (/history, /recent, /stop)")
+                                yield Input(id="agent-input", placeholder="Ask the agent...  (/agent list, /model gemma4:e2b, /stop)")
 
             # ── 6 ORDERS (Order Management) ──
             with Vertical(id="orders", classes="tab-pane"):
@@ -4957,6 +4980,21 @@ class NepseDashboard(App):
         meta = dict((getattr(self, "_agent_analysis", {}) or {}).get("agent_runtime_meta") or {})
         return str(meta.get("provider") or "gemma4_mlx")
 
+    def _agent_runtime_summary(self) -> str:
+        cfg = load_active_agent_config()
+        preset = str(cfg.get("selected_preset") or cfg.get("backend") or "ollama")
+        backend = str(cfg.get("backend") or preset)
+        model = str(cfg.get("model") or "").strip() or "default"
+        return f"{preset} backend={backend} model={model}"
+
+    def _agent_backends_help(self) -> str:
+        backends = list_agent_backends()
+        parts = [
+            f"{row['id']} ({row.get('model') or 'no default model'})"
+            for row in backends
+        ]
+        return "Agent backends: " + ", ".join(parts)
+
     def _stop_active_agent_chat(self, *, announce: bool = True) -> bool:
         proc = getattr(self, "_agent_chat_process", None)
         if proc is None:
@@ -5979,7 +6017,7 @@ class NepseDashboard(App):
             f"[#888888]Super:[/] [bold {AMBER}]{n_super}[/]   "
             f"[#888888]Regime:[/] [{YELLOW}]{regime}[/]   "
             f"[#888888]Updated:[/] [{LABEL}]{age_str}[/]   "
-            f"[#555555]A=Analyze  │  /history  │  /recent[/]"
+            f"[#555555]A=Analyze  │  /agent  │  /model  │  /history[/]"
         ))
 
     def _populate_agent_meta_headers(self, analysis: dict) -> None:
@@ -6345,8 +6383,54 @@ class NepseDashboard(App):
                 return True
             self._set_status("No active agent response to stop")
             return True
+        if command in {"/agent", "/agent status"}:
+            summary = self._agent_runtime_summary()
+            self._append_chat_note(f"Active agent: {summary}. Config: {ACTIVE_AGENT_FILE}")
+            self._set_status(f"Active agent: {summary}")
+            return True
+        if command in {"/agent list", "/agents", "/backends"}:
+            help_text = self._agent_backends_help()
+            self._append_chat_note(help_text)
+            self._set_status(help_text)
+            return True
+        if command.startswith("/agent "):
+            try:
+                parts = shlex.split(raw)
+                if len(parts) < 2:
+                    raise ValueError("Usage: /agent <ollama|gemma4_mlx|gemma4_experimental|claude> [model]")
+                preset = parts[1].strip()
+                model = parts[2].strip() if len(parts) >= 3 else None
+                cfg = set_active_agent(preset, model=model)
+                summary = self._agent_runtime_summary()
+                self._append_chat_note(f"Agent switched: {summary}")
+                self._set_status(f"Agent switched to {cfg.get('selected_preset')} | model {cfg.get('model') or 'default'}")
+                self._populate_agent_tab()
+                return True
+            except Exception as exc:
+                self._set_status(f"Agent switch failed: {exc}")
+                return True
+        if command.startswith("/model"):
+            try:
+                parts = shlex.split(raw)
+                if len(parts) < 2:
+                    summary = self._agent_runtime_summary()
+                    self._append_chat_note(f"Active model: {summary}")
+                    self._set_status(f"Active agent: {summary}")
+                    return True
+                model = " ".join(parts[1:]).strip()
+                cfg = load_active_agent_config()
+                preset = str(cfg.get("selected_preset") or cfg.get("backend") or "ollama")
+                saved = set_active_agent(preset, model=model)
+                summary = self._agent_runtime_summary()
+                self._append_chat_note(f"Agent model updated: {summary}")
+                self._set_status(f"Agent model set to {saved.get('model')}")
+                self._populate_agent_tab()
+                return True
+            except Exception as exc:
+                self._set_status(f"Model update failed: {exc}")
+                return True
         if command == "/help":
-            self._set_status("Agent chat commands: /history, /recent, /clear, /stop")
+            self._set_status("Agent commands: /agent, /agent list, /agent ollama gemma4:e2b, /model <name>, /history, /recent, /clear, /stop")
             return True
         return False
 
@@ -9582,9 +9666,9 @@ class NepseDashboard(App):
                 continue
             seen.add(sym)
             symbols.append(sym)
-        self._live_watchlist = [_stock_watchlist_entry(sym) for sym in symbols]
+        self._live_watchlist = _dedupe_watchlist_entries([_stock_watchlist_entry(sym) for sym in symbols])
         local_extras = [item for item in self._paper_watchlist if str(item.get("kind") or "stock") != "stock"]
-        self._watchlist = list(self._live_watchlist) + local_extras
+        self._watchlist = _merge_watchlist_entries(self._live_watchlist, local_extras)
         bundle = dict(getattr(self, "_tms_bundle", None) or {})
         bundle["watchlist"] = snapshot
         self._tms_bundle = bundle
@@ -9663,10 +9747,12 @@ class NepseDashboard(App):
                 watchlist_source = "TMS"
             elif self._live_watchlist:
                 local_extras = [item for item in self._paper_watchlist if str(item.get("kind") or "stock") != "stock"]
-                self._watchlist = list(self._live_watchlist) + local_extras
+                self._watchlist = _merge_watchlist_entries(self._live_watchlist, local_extras)
                 watchlist_source = "CACHE"
             else:
-                self._watchlist = [item for item in self._paper_watchlist if str(item.get("kind") or "stock") != "stock"]
+                self._watchlist = _dedupe_watchlist_entries(
+                    [item for item in self._paper_watchlist if str(item.get("kind") or "stock") != "stock"]
+                )
                 watchlist_source = "TMS"
         else:
             self._watchlist, held_count = self._effective_paper_watchlist()
