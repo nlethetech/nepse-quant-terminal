@@ -31,6 +31,14 @@ def _json_write(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _json_read(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _baseline_c31_config() -> Dict[str, Any]:
     config = copy.deepcopy(LONG_TERM_CONFIG)
     config.setdefault("use_trailing_stop", True)
@@ -200,11 +208,15 @@ def _summarize_backtest_result(strategy_id: str, description: str, result: Any) 
         "annualized_return_pct": _pct(getattr(result, "annualized_return", 0.0)),
         "volatility_pct": _pct(getattr(result, "volatility", 0.0)),
         "sharpe": round(float(getattr(result, "sharpe_ratio", 0.0) or 0.0), 4),
+        "sharpe_ratio": round(float(getattr(result, "sharpe_ratio", 0.0) or 0.0), 4),
         "sortino": round(float(getattr(result, "sortino_ratio", 0.0) or 0.0), 4),
+        "sortino_ratio": round(float(getattr(result, "sortino_ratio", 0.0) or 0.0), 4),
         "max_drawdown_pct": _pct(getattr(result, "max_drawdown", 0.0)),
         "max_drawdown_duration": int(getattr(result, "max_drawdown_duration", 0) or 0),
         "calmar": round(float(getattr(result, "calmar_ratio", 0.0) or 0.0), 4),
+        "calmar_ratio": round(float(getattr(result, "calmar_ratio", 0.0) or 0.0), 4),
         "total_trades": int(getattr(result, "total_trades", 0) or 0),
+        "trade_count": int(getattr(result, "total_trades", 0) or 0),
         "win_rate_pct": _pct(getattr(result, "win_rate", 0.0)),
         "avg_win_pct": _pct(getattr(result, "avg_win", 0.0)),
         "avg_loss_pct": _pct(getattr(result, "avg_loss", 0.0)),
@@ -296,24 +308,74 @@ def run_strategy_backtest(strategy: Dict[str, Any], *, start_date: str, end_date
 
 
 def load_strategy_comparison_snapshot() -> Optional[Dict[str, Any]]:
-    if not COMPARISON_LATEST_JSON.exists():
+    return _json_read(COMPARISON_LATEST_JSON) if COMPARISON_LATEST_JSON.exists() else None
+
+
+def strategy_backtest_path(strategy_id: str) -> Path:
+    sid = str(strategy_id or "").strip()
+    return BACKTEST_RESULTS_DIR / f"{sid}_latest.json"
+
+
+def load_strategy_backtest_result(strategy_id: str) -> Optional[Dict[str, Any]]:
+    sid = str(strategy_id or "").strip()
+    if not sid:
         return None
-    try:
-        payload = json.loads(COMPARISON_LATEST_JSON.read_text(encoding="utf-8"))
-    except Exception:
+    path = strategy_backtest_path(sid)
+    payload = _json_read(path) if path.exists() else None
+    if not payload:
         return None
-    return payload if isinstance(payload, dict) else None
+    strategy = dict(payload.get("strategy") or {})
+    if str(strategy.get("id") or sid) != sid:
+        return None
+    return payload
+
+
+def _normalize_metrics(metrics: Dict[str, Any], *, window: Dict[str, Any], nepse: Dict[str, Any]) -> Dict[str, Any]:
+    row = dict(metrics or {})
+    if "sharpe_ratio" not in row and "sharpe" in row:
+        row["sharpe_ratio"] = row.get("sharpe")
+    if "sharpe" not in row and "sharpe_ratio" in row:
+        row["sharpe"] = row.get("sharpe_ratio")
+    if "sortino_ratio" not in row and "sortino" in row:
+        row["sortino_ratio"] = row.get("sortino")
+    if "sortino" not in row and "sortino_ratio" in row:
+        row["sortino"] = row.get("sortino_ratio")
+    if "calmar_ratio" not in row and "calmar" in row:
+        row["calmar_ratio"] = row.get("calmar")
+    if "calmar" not in row and "calmar_ratio" in row:
+        row["calmar"] = row.get("calmar_ratio")
+    if "trade_count" not in row and "total_trades" in row:
+        row["trade_count"] = row.get("total_trades")
+    if "total_trades" not in row and "trade_count" in row:
+        row["total_trades"] = row.get("trade_count")
+    row["window"] = dict(window or {})
+    row["nepse"] = dict(nepse or {})
+    if "vs_nepse_pct_points" not in row:
+        row["vs_nepse_pct_points"] = round(
+            float(row.get("total_return_pct") or 0.0) - float((row.get("nepse") or {}).get("return_pct") or 0.0),
+            4,
+        )
+    return row
 
 
 def comparison_metrics_for_strategy(strategy_id: str) -> Optional[Dict[str, Any]]:
+    latest = load_strategy_backtest_result(strategy_id)
+    if latest:
+        return _normalize_metrics(
+            dict(latest.get("summary") or {}),
+            window=dict(latest.get("window") or {}),
+            nepse=dict(latest.get("nepse") or {}),
+        )
+
     snapshot = load_strategy_comparison_snapshot()
     if not snapshot:
         return None
     target = str(strategy_id or "").strip()
     for row in list(snapshot.get("strategies") or []):
         if str(row.get("id") or "") == target:
-            metrics = dict(row.get("summary") or {})
-            metrics["window"] = dict(snapshot.get("window") or {})
-            metrics["nepse"] = dict(snapshot.get("nepse") or {})
-            return metrics
+            return _normalize_metrics(
+                dict(row.get("summary") or {}),
+                window=dict(snapshot.get("window") or {}),
+                nepse=dict(snapshot.get("nepse") or {}),
+            )
     return None

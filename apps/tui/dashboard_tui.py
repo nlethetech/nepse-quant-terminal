@@ -6690,17 +6690,23 @@ class NepseDashboard(App):
             except Exception as exc:
                 self._set_status(f"Strategy backtest failed: {exc}")
         elif bid == "strategy-btn-chart":
-            result = getattr(self, "_strategy_backtest_result", None)
+            selected = self._selected_strategy_payload()
+            selected_id = str((selected or {}).get("id") or getattr(self, "_selected_strategy_id", "") or "").strip()
+            result = dict(getattr(self, "_strategy_backtest_result", {}) or {})
+            if result and str((result.get("strategy") or {}).get("id") or "") != selected_id:
+                result = {}
+            if not result and selected_id:
+                result = dict(strategy_registry.load_strategy_backtest_result(selected_id) or {})
             if not result:
                 self._set_status("Run a backtest first — no result to chart")
             else:
                 try:
                     from validation.quick_chart import generate_quick_chart
                     from backend.quant_pro.database import get_db_path as _get_db_path
-                    selected = self._selected_strategy_payload()
                     name   = str((selected or {}).get("name") or "Strategy")
-                    start  = str(self.query_one("#strategy-inp-backtest-start", Input).value or "").strip()
-                    end    = str(self.query_one("#strategy-inp-backtest-end", Input).value or "").strip()
+                    window = dict(result.get("window") or {})
+                    start  = str(window.get("start") or self.query_one("#strategy-inp-backtest-start", Input).value or "").strip()
+                    end    = str(window.get("end") or self.query_one("#strategy-inp-backtest-end", Input).value or "").strip()
                     path   = generate_quick_chart(
                         result,
                         strategy_name=name,
@@ -7401,6 +7407,11 @@ class NepseDashboard(App):
         except Exception:
             return
         result = dict(getattr(self, "_strategy_backtest_result", {}) or {})
+        selected_id = str(getattr(self, "_selected_strategy_id", "") or "").strip()
+        if result and str((result.get("strategy") or {}).get("id") or "") != selected_id:
+            result = {}
+        if not result and selected_id:
+            result = dict(strategy_registry.load_strategy_backtest_result(selected_id) or {})
         if not result:
             widget.update(
                 Text.from_markup(
@@ -7418,9 +7429,9 @@ class NepseDashboard(App):
                 f"[bold {WHITE}]Strategy[/] {summary.get('total_return_pct', 0.0):+.2f}%   "
                 f"[bold {WHITE}]NEPSE[/] {float(nepse.get('return_pct') or 0.0):+.2f}%   "
                 f"[bold {WHITE}]Alpha[/] {float(summary.get('vs_nepse_pct_points') or 0.0):+.2f}pp   "
-                f"[bold {WHITE}]Sharpe[/] {float(summary.get('sharpe_ratio') or 0.0):.2f}   "
+                f"[bold {WHITE}]Sharpe[/] {float(summary.get('sharpe_ratio', summary.get('sharpe')) or 0.0):.2f}   "
                 f"[bold {WHITE}]MaxDD[/] {float(summary.get('max_drawdown_pct') or 0.0):+.2f}%   "
-                f"[bold {WHITE}]Trades[/] {int(summary.get('trade_count') or 0)}\n"
+                f"[bold {WHITE}]Trades[/] {int(summary.get('trade_count', summary.get('total_trades')) or 0)}\n"
                 f"[#8aa0b5]Saved[/] data/strategy_registry/backtests/{str(result.get('strategy', {}).get('id') or 'strategy')}_latest.json"
             )
         )

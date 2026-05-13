@@ -185,9 +185,9 @@ def generate_quick_chart(
 
     # ── Key metrics ───────────────────────────────────────────────────────────
     strat_ret = float(summary.get("total_return_pct", 0) or 0)
-    sharpe    = float(summary.get("sharpe_ratio", 0) or 0)
+    sharpe    = float(summary.get("sharpe_ratio", summary.get("sharpe")) or 0)
     max_dd    = float(summary.get("max_drawdown_pct", 0) or 0)
-    trades    = int(summary.get("trade_count", 0) or 0)
+    trades    = int(summary.get("trade_count", summary.get("total_trades")) or 0)
     win_rate  = float(summary.get("win_rate_pct", 0) or 0)
     alpha     = strat_ret - nepse_ret_pct
 
