@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from backend.trading.live_trader import PORTFOLIO_COLS, TRADE_LOG_COLS
+from backend.trading.live_trader import PORTFOLIO_COLS, TRADE_LOG_COLS, Position
 from backend.trading.paper_execution import PaperExecutionService
 from backend.trading.tui_trading_engine import TUITradingEngine
 
@@ -127,3 +127,47 @@ def test_tui_trading_engine_autopilot_writes_canonical_account_ledger(tmp_path, 
     assert trades.loc[0, "Reason"] == "volume"
     assert (tmp_path / "strategy_runs" / "run-1.json").exists()
     assert any("BUY NABIL" in event for event in events)
+
+
+def test_tui_trading_engine_passes_risk_thresholds_to_exit_check(tmp_path, monkeypatch):
+    monkeypatch.setattr("backend.trading.tui_trading_engine.fetch_prices_for_symbols", lambda symbols: {"NABIL": 91.0})
+    seen = {}
+
+    def fake_check_exits(positions, holding_days, stop_loss_pct, trailing_stop_pct):
+        seen["holding_days"] = holding_days
+        seen["stop_loss_pct"] = stop_loss_pct
+        seen["trailing_stop_pct"] = trailing_stop_pct
+        return []
+
+    monkeypatch.setattr("backend.trading.tui_trading_engine.check_exits", fake_check_exits)
+    engine = TUITradingEngine(
+        capital=1_000_000,
+        holding_days=12,
+        stop_loss_pct=0.06,
+        trailing_stop_pct=0.11,
+        portfolio_file=tmp_path / "paper_portfolio.csv",
+        trade_log_file=tmp_path / "paper_trade_log.csv",
+        nav_log_file=tmp_path / "paper_nav_log.csv",
+        state_file=tmp_path / "paper_state.json",
+        account_id="account_1",
+    )
+    engine.positions = {
+        "NABIL": Position(
+            symbol="NABIL",
+            shares=10,
+            entry_price=100.0,
+            entry_date="2026-04-01",
+            buy_fees=0.0,
+            signal_type="volume",
+            high_watermark=105.0,
+            last_ltp=100.0,
+        )
+    }
+
+    engine._refresh_and_check_exits()
+
+    assert seen == {
+        "holding_days": 12,
+        "stop_loss_pct": 0.06,
+        "trailing_stop_pct": 0.11,
+    }
