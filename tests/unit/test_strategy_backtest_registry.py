@@ -75,9 +75,20 @@ def test_run_strategy_backtest_does_not_require_private_temp_runner(monkeypatch,
     )
 
     assert payload["summary"]["total_return_pct"] == 10.0
+    assert payload["summary"]["sharpe_ratio"] == payload["summary"]["sharpe"]
+    assert payload["summary"]["trade_count"] == payload["summary"]["total_trades"]
     assert payload["summary"]["vs_nepse_pct_points"] == 5.0
     assert payload["summary"]["daily_nav"][-1] == ["2026-01-05", 1100.0]
     assert (tmp_path / "demo_latest.json").exists()
+
+    latest = strategy_registry.load_strategy_backtest_result("demo")
+    assert latest is not None
+    metrics = strategy_registry.comparison_metrics_for_strategy("demo")
+    assert metrics is not None
+    assert metrics["total_return_pct"] == 10.0
+    assert metrics["vs_nepse_pct_points"] == 5.0
+    assert metrics["trade_count"] == metrics["total_trades"]
+    assert metrics["sharpe_ratio"] == metrics["sharpe"]
 
 
 def test_run_backtest_broker_exit_uses_public_db_path(monkeypatch, tmp_path):
