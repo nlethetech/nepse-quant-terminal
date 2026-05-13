@@ -371,6 +371,20 @@ def _save_watchlist(entries: list[dict]) -> None:
     WATCHLIST_FILE.write_text(_json.dumps(_dedupe_watchlist_entries(entries), indent=2))
 
 
+def _dedupe_symbol_rows(rows: list | tuple) -> list:
+    """Return one row per symbol, keeping the last row seen for duplicate symbols."""
+    deduped: dict[str, Any] = {}
+    for row in rows or []:
+        try:
+            symbol = str(row[0] or "").strip().upper()
+        except Exception:
+            continue
+        if not symbol:
+            continue
+        deduped[symbol] = row
+    return list(deduped.values())
+
+
 def _ensure_csv_file(path: Path, columns: list[str]) -> None:
     target = Path(path)
     ensure_dir(target.parent)
@@ -4058,8 +4072,6 @@ class NepseDashboard(App):
         self.query_one("#content", ContentSwitcher).current = name
         self._update_header()
         self._refresh_active_tab_view(force_watchlist_sync=True)
-        if name == "signals":
-            self._load_signals_async()
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
@@ -8556,12 +8568,13 @@ class NepseDashboard(App):
                         "WHERE date=? AND symbol != 'NEPSE'",
                         (latest_date,)
                     ).fetchall()
+                    today_rows = _dedupe_symbol_rows(today_rows)
                     prev_map = {
                         r[0]: float(r[1])
-                        for r in conn.execute(
+                        for r in _dedupe_symbol_rows(conn.execute(
                             "SELECT symbol, close FROM stock_prices WHERE date=?",
                             (prev_date,)
-                        ).fetchall()
+                        ).fetchall())
                     }
                     avg_vol_map = {
                         r[0]: float(r[1]) if r[1] else 0.0
@@ -10115,11 +10128,12 @@ class NepseDashboard(App):
                     "WHERE date=? AND symbol != 'NEPSE'",
                     (latest_date,)
                 ).fetchall()
+                today_rows = _dedupe_symbol_rows(today_rows)
                 prev_map = {}
-                for r in conn.execute(
+                for r in _dedupe_symbol_rows(conn.execute(
                     "SELECT symbol, close FROM stock_prices WHERE date=?",
                     (prev_date,)
-                ).fetchall():
+                ).fetchall()):
                     prev_map[r[0]] = float(r[1])
 
                 # Get 20-day avg volume for vol ratio

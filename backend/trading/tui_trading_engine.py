@@ -305,11 +305,11 @@ class TUITradingEngine:
                 self._log(f"Tick error: {e}")
                 logger.exception("TUI engine tick error")
 
-            # Sleep in small increments so stop() is responsive
-            for _ in range(10):
+            # Sleep in short increments so dashboard quit does not wait on a long polling sleep.
+            for _ in range(50):
                 if self._stop_flag:
                     break
-                time.sleep(1)
+                time.sleep(0.2)
 
         self._persist_state()
         self._log("Engine stopped")
