@@ -55,7 +55,15 @@ def test_run_strategy_backtest_does_not_require_private_temp_runner(monkeypatch,
         ],
     )
 
-    monkeypatch.setattr("backend.backtesting.simple_backtest.run_backtest", lambda **_kwargs: result)
+    progress_events = []
+
+    def fake_run_backtest(**kwargs):
+        callback = kwargs.get("progress_callback")
+        if callback:
+            callback({"phase": "running", "progress_pct": 42, "message": "2/5 days"})
+        return result
+
+    monkeypatch.setattr("backend.backtesting.simple_backtest.run_backtest", fake_run_backtest)
     monkeypatch.setattr(strategy_registry, "_nepse_return", lambda *_args: {"return_pct": 5.0})
     monkeypatch.setattr(strategy_registry, "BACKTEST_RESULTS_DIR", tmp_path)
 
@@ -72,8 +80,10 @@ def test_run_strategy_backtest_does_not_require_private_temp_runner(monkeypatch,
         start_date="2026-01-01",
         end_date="2026-01-05",
         capital=1000.0,
+        progress_callback=progress_events.append,
     )
 
+    assert progress_events == [{"phase": "running", "progress_pct": 42, "message": "2/5 days"}]
     assert payload["summary"]["total_return_pct"] == 10.0
     assert payload["summary"]["sharpe_ratio"] == payload["summary"]["sharpe"]
     assert payload["summary"]["trade_count"] == payload["summary"]["total_trades"]

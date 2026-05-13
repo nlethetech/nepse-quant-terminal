@@ -271,11 +271,20 @@ def _nepse_return(start_date: str, end_date: str) -> Dict[str, Any]:
     }
 
 
-def run_strategy_backtest(strategy: Dict[str, Any], *, start_date: str, end_date: str, capital: float) -> Dict[str, Any]:
+def run_strategy_backtest(
+    strategy: Dict[str, Any],
+    *,
+    start_date: str,
+    end_date: str,
+    capital: float,
+    progress_callback: Optional[Any] = None,
+) -> Dict[str, Any]:
     from backend.backtesting.simple_backtest import run_backtest
 
     config = copy.deepcopy(strategy.get("config") or {})
     config["initial_capital"] = float(capital)
+    if progress_callback is not None:
+        config["progress_callback"] = progress_callback
     result = run_backtest(start_date=start_date, end_date=end_date, **config)
     summary = _summarize_backtest_result(
         str(strategy.get("id") or "strategy"),

@@ -3508,6 +3508,7 @@ class NepseDashboard(App):
     _strategies: list[dict] = []
     _selected_strategy_id: str = "default_c5"
     _strategy_backtest_result: dict = {}
+    _strategy_backtest_statuses: dict = {}
     _agent_chat_process: Optional[subprocess.Popen] = None
     _agent_chat_request_id: int = 0
     _agent_chat_stop_requested: bool = False
@@ -7439,6 +7440,63 @@ class NepseDashboard(App):
     def _strategy_saved_metrics(self, strategy_id: str) -> Optional[dict]:
         return strategy_registry.comparison_metrics_for_strategy(strategy_id)
 
+    def _set_strategy_backtest_status(
+        self,
+        strategy_id: str,
+        status: str,
+        message: str = "",
+        progress_pct: Optional[int] = None,
+    ) -> None:
+        sid = str(strategy_id or "").strip()
+        if not sid:
+            return
+        statuses = dict(getattr(self, "_strategy_backtest_statuses", {}) or {})
+        current = dict(statuses.get(sid) or {})
+        if progress_pct is None:
+            progress_pct = current.get("progress_pct")
+        statuses[sid] = {
+            **current,
+            "status": str(status or "").upper(),
+            "message": str(message or ""),
+            "progress_pct": progress_pct,
+        }
+        self._strategy_backtest_statuses = statuses
+        self._populate_strategy_list()
+
+    def _strategy_backtest_status_cell(self, strategy_id: str, metrics: dict) -> Text:
+        sid = str(strategy_id or "").strip()
+        state = dict(((getattr(self, "_strategy_backtest_statuses", {}) or {}).get(sid) or {}))
+        status = str(state.get("status") or "").upper()
+        if status == "RUN":
+            progress = state.get("progress_pct")
+            if progress is not None:
+                return Text(f"{int(progress):>3d}%", style=YELLOW)
+            return Text("RUN", style=YELLOW)
+        if status == "CHART":
+            return Text("CHART", style=YELLOW)
+        if status == "FAIL":
+            return Text("FAIL", style=LOSS_HI)
+        if metrics:
+            return Text("OK", style=GAIN_HI)
+        return Text("—", style=LABEL)
+
+    def _on_strategy_backtest_progress(self, strategy_id: str, payload: dict) -> None:
+        sid = str(strategy_id or "").strip()
+        if not sid:
+            return
+        progress = payload.get("progress_pct")
+        try:
+            progress_int = max(0, min(100, int(progress)))
+        except Exception:
+            progress_int = None
+        message = str(payload.get("message") or "").strip()
+        date_text = str(payload.get("date") or "").strip()
+        if date_text:
+            message = f"{message} | {date_text}".strip(" |")
+        self._set_strategy_backtest_status(sid, "RUN", message, progress_int)
+        if message:
+            self._set_status(f"Backtest progress | {progress_int if progress_int is not None else 0}% | {message}")
+
     def _populate_strategy_list(self) -> None:
         try:
             dt = self.query_one("#dt-strategy-list", DataTable)
@@ -7455,6 +7513,7 @@ class NepseDashboard(App):
             ("DD", "dd", 9),
             ("TRD", "trades", 4),
             ("WR", "win_rate", 6),
+            ("BT", "backtest_status", 7),
         ]:
             dt.add_column(label, key=key, width=width)
         selected_index = 0
@@ -7475,6 +7534,7 @@ class NepseDashboard(App):
                 Text(f"{float(metrics.get('max_drawdown_pct') or 0.0):+.2f}%" if metrics else "—", style=WHITE),
                 Text(str(int(metrics.get("trade_count") or 0)) if metrics else "—", style=WHITE),
                 Text(f"{float(metrics.get('win_rate_pct') or 0.0):.0f}%" if metrics else "—", style=WHITE),
+                self._strategy_backtest_status_cell(sid, metrics),
             )
         if self._strategies:
             try:
@@ -7482,7 +7542,7 @@ class NepseDashboard(App):
             except Exception:
                 pass
         else:
-            dt.add_row(_dim_text("No strategies"), Text(""), Text(""), Text(""), Text(""), Text(""), Text(""), Text(""), Text(""))
+            dt.add_row(_dim_text("No strategies"), Text(""), Text(""), Text(""), Text(""), Text(""), Text(""), Text(""), Text(""), Text(""))
         try:
             row_count = max(1, len(list(getattr(self, "_strategies", []) or [])))
             dt.styles.height = min(max(row_count + 3, 7), 10)
@@ -7623,6 +7683,7 @@ class NepseDashboard(App):
             payload = strategy_registry.load_strategy(strategy_id)
             if not payload:
                 raise ValueError("Strategy not found")
+            self.call_from_thread(self._set_strategy_backtest_status, strategy_id, "RUN")
             self.call_from_thread(self._set_status, f"Backtesting {payload.get('name')}...")
             log_path = PROJECT_ROOT / "data" / "runtime" / "logs" / "strategy_backtest.log"
             log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -7662,6 +7723,11 @@ class NepseDashboard(App):
                     start_date=start_date,
                     end_date=end_date,
                     capital=capital,
+                    progress_callback=lambda progress: self.call_from_thread(
+                        self._on_strategy_backtest_progress,
+                        strategy_id,
+                        dict(progress or {}),
+                    ),
                 )
                 logging.getLogger(__name__).info("Finished strategy backtest id=%s", strategy_id)
             finally:
@@ -7676,6 +7742,7 @@ class NepseDashboard(App):
             summary = dict(result.get("summary") or {})
             nepse   = dict(result.get("nepse") or {})
             self.call_from_thread(self._populate_strategies_tab)
+            self.call_from_thread(self._set_strategy_backtest_status, strategy_id, "CHART")
             strat_ret = float(summary.get("total_return_pct") or 0.0)
             nepse_ret = float(nepse.get("return_pct") or 0.0)
             self.call_from_thread(
@@ -7701,7 +7768,9 @@ class NepseDashboard(App):
                 self._set_status,
                 f"Backtest done | {payload.get('name')} {strat_ret:+.2f}% vs NEPSE {nepse_ret:+.2f}%{chart_note}",
             )
+            self.call_from_thread(self._set_strategy_backtest_status, strategy_id, "OK")
         except Exception as exc:
+            self.call_from_thread(self._set_strategy_backtest_status, strategy_id, "FAIL", str(exc))
             self.call_from_thread(self._set_status, f"Strategy backtest failed: {exc}")
 
     def _start_strategy_backtest(self) -> str:
@@ -7714,7 +7783,9 @@ class NepseDashboard(App):
         if not start or not end:
             raise ValueError("Enter start and end dates")
         capital = float(capital_raw or INITIAL_CAPITAL)
-        self._run_strategy_backtest_async(str(selected.get("id") or ""), start, end, capital)
+        strategy_id = str(selected.get("id") or "")
+        self._set_strategy_backtest_status(strategy_id, "RUN")
+        self._run_strategy_backtest_async(strategy_id, start, end, capital)
         return f"Backtest launched for {selected.get('name')}"
 
     def _profile_runtime_snapshot(self, *, account_dir: Optional[Path] = None) -> dict:
