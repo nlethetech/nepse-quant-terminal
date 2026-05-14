@@ -20,6 +20,12 @@ from .realtime_market import get_market_data_provider
 logger = logging.getLogger(__name__)
 
 
+def _normalize_epoch_seconds(value: int) -> int:
+    """Accept epoch seconds or milliseconds and send seconds to Merolagani."""
+    ts = int(value)
+    return ts // 1000 if ts > 10_000_000_000 else ts
+
+
 class _RateLimiter:
     """Token-bucket rate limiter (0.5 req/sec = 1 request per 2 seconds)."""
 
@@ -57,8 +63,8 @@ def fetch_ohlcv_chunk(symbol: str, start_ts: int, end_ts: int) -> pd.DataFrame:
         "type": "get_advanced_chart",
         "symbol": symbol,
         "resolution": "1D",
-        "rangeStartDate": int(start_ts),
-        "rangeEndDate": int(end_ts),
+        "rangeStartDate": _normalize_epoch_seconds(start_ts),
+        "rangeEndDate": _normalize_epoch_seconds(end_ts),
         "isAdjust": "1",
         "currencyCode": "NPR",
     }
@@ -69,7 +75,21 @@ def fetch_ohlcv_chunk(symbol: str, start_ts: int, end_ts: int) -> pd.DataFrame:
     }
     response = requests.get(url, params=params, headers=headers, timeout=15)
     response.raise_for_status()
-    data = response.json()
+    content_type = str(response.headers.get("content-type") or "").lower()
+    if "html" in content_type:
+        logger.warning(
+            "Merolagani returned HTML instead of OHLCV JSON for symbol=%s; treating as no data",
+            symbol,
+        )
+        return pd.DataFrame()
+    try:
+        data = response.json()
+    except ValueError:
+        logger.warning(
+            "Merolagani returned non-JSON OHLCV response for symbol=%s; treating as no data",
+            symbol,
+        )
+        return pd.DataFrame()
 
     # Merolagani returns {"s":"no_data"} for some index symbols/ranges.
     # Treat that as a valid empty result, not a schema failure worth retrying.

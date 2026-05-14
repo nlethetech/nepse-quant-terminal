@@ -84,6 +84,22 @@ def test_paper_execution_rejects_suspended_symbol_visibly(tmp_path, monkeypatch)
     assert state["order_history"][0]["symbol"] == "UIC"
 
 
+def test_paper_execution_rejects_promoter_share_visibly(tmp_path, monkeypatch):
+    monkeypatch.setattr("backend.trading.paper_execution.current_nepal_datetime", _fixed_nst)
+    service = PaperExecutionService("account_1", account_dir=tmp_path, max_order_notional=500_000)
+
+    result = service.submit_order("account_1", "BUY", "NABILP", 100, 100.0, "strategy_paper", "volume")
+    state = service.get_account_execution_state("account_1")
+
+    assert not result.ok
+    assert result.risk_result["reason"] == "blocked_symbol"
+    assert result.risk_result["detail"] == "promoter_share_not_tradeable"
+    assert "Blocked symbol NABILP" in result.message
+    assert not state["open_orders"]
+    assert state["order_history"][0]["status"] == "REJECTED"
+    assert state["order_history"][0]["symbol"] == "NABILP"
+
+
 def test_paper_execution_migrates_legacy_tui_trade_log_without_duplicates(tmp_path):
     pd.DataFrame(columns=PORTFOLIO_COLS).to_csv(tmp_path / "paper_portfolio.csv", index=False)
     legacy_trade = pd.DataFrame(

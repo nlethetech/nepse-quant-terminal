@@ -13,6 +13,17 @@ SYMBOL_ALIASES: Dict[str, str] = {
 }
 
 DEFAULT_BLOCKED_SIGNAL_SYMBOLS = frozenset({"KRBL", "UIC"})
+DEFAULT_PROMOTER_SHARE_SYMBOLS = frozenset(
+    {
+        "CYCLP",
+        "GBIMEP",
+        "HEIP",
+        "HIDCLP",
+        "NABILP",
+        "PROFLP",
+        "SRLIP",
+    }
+)
 BLOCKED_SYMBOLS_ENV = "NEPSE_BLOCKED_SYMBOLS"
 
 
@@ -43,6 +54,8 @@ def blocked_signal_symbol_reason(symbol: Any) -> Optional[str]:
         return "sector_index_not_tradeable"
     if token in blocked_signal_symbols():
         return "suspended_or_non_tradeable_symbol"
+    if token.endswith("PO") or token in DEFAULT_PROMOTER_SHARE_SYMBOLS:
+        return "promoter_share_not_tradeable"
     return None
 
 
