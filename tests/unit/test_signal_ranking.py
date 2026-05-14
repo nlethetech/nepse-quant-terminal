@@ -19,6 +19,16 @@ def test_tradeable_policy_blocks_indexes_and_suspended_symbols():
     assert is_tradeable_signal_symbol("NABIL")
 
 
+def test_tradeable_policy_blocks_promoter_shares_without_suffix_false_positives():
+    assert not is_tradeable_signal_symbol("NABILP")
+    assert not is_tradeable_signal_symbol("HIDCLP")
+    assert not is_tradeable_signal_symbol("KBLPO")
+    assert blocked_signal_symbol_reason("NABILP") == "promoter_share_not_tradeable"
+    assert blocked_signal_symbol_reason("KBLPO") == "promoter_share_not_tradeable"
+    assert is_tradeable_signal_symbol("NADEP")
+    assert is_tradeable_signal_symbol("RRHP")
+
+
 def test_tradeable_policy_honors_env_blocklist(monkeypatch):
     monkeypatch.setenv("NEPSE_BLOCKED_SYMBOLS", "AAA, BBB")
 

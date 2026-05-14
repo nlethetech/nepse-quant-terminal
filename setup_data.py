@@ -89,13 +89,14 @@ def download_db():
 
 def load_symbols() -> list[str]:
     if ALL_SYMBOLS_FILE.exists():
+        from backend.quant_pro.signal_ranking import is_tradeable_signal_symbol
         syms = [s.strip() for s in ALL_SYMBOLS_FILE.read_text().splitlines() if s.strip()]
-        return [s for s in syms if not s.startswith("SECTOR::") and s != "NEPSE"]
+        return [s for s in syms if is_tradeable_signal_symbol(s)]
     return []
 
 
 def ts(dt: datetime) -> int:
-    return int(dt.timestamp() * 1000)
+    return int(dt.timestamp())
 
 
 def backfill_symbol(symbol: str, start: datetime, end: datetime) -> int:
