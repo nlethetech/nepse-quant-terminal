@@ -43,6 +43,21 @@ def test_mcp_tool_adapters_route_to_service():
     assert "reconcile_live_state" not in tools
 
 
+def test_env_mcp_control_plane_starts_in_paper_only_mode(monkeypatch, tmp_path):
+    from backend.quant_pro.control_plane.command_service import build_env_live_trader_control_plane
+
+    monkeypatch.setenv("NEPSE_MCP_PAPER_PORTFOLIO", str(tmp_path / "paper_portfolio.csv"))
+    monkeypatch.setenv("NEPSE_MCP_ACCOUNT_ID", "account_1")
+    monkeypatch.setenv("NEPSE_ACTIVE_ACCOUNT_ID", "account_1")
+
+    service = build_env_live_trader_control_plane()
+
+    assert service.mode == TradingMode.PAPER
+    assert service.paper_execution_service is not None
+    assert getattr(service.trader, "live_execution_enabled") is False
+    assert getattr(service.trader, "live_settings").mode == "paper"
+
+
 def test_mcp_tool_adapters_expose_paper_agent_graph(monkeypatch):
     monkeypatch.setattr(
         "apps.mcp.server.run_paper_decision",
