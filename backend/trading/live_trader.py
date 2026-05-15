@@ -124,7 +124,28 @@ from backend.quant_pro.tms_audit import (
 )
 
 class _TmsStub:
-    pass
+    def __init__(self, *args: Any, **kwargs: Any):
+        pass
+
+
+@dataclass
+class PaperOnlyLiveSettings:
+    """Safe live-execution settings stub for the public paper-only build."""
+
+    mode: str = "paper"
+    enabled: bool = False
+    strategy_automation_enabled: bool = False
+    auto_exits_enabled: bool = False
+    owner_confirm_required: bool = True
+    max_order_notional: float = 0.0
+    max_daily_orders: int = 0
+    symbol_cooldown_secs: int = 0
+    max_price_deviation_pct: float = 2.5
+
+
+def validate_live_setup(settings: PaperOnlyLiveSettings, *, interactive: bool = False) -> List[str]:
+    """Live brokerage connectors are intentionally unavailable in this build."""
+    return []
 
 TMSBrowserExecutor = _TmsStub
 
@@ -2356,9 +2377,11 @@ class LiveTrader:
         self.sector_limit = float(self.strategy_config.get("sector_limit") or self.regime_sector_limits.get("neutral", 0.35))
         requested_execution_mode = str(getattr(args, "mode", "paper") or "paper").strip().lower()
         self.execution_mode = "paper"
+        self.live_settings = PaperOnlyLiveSettings()
         self.live_settings.mode = self.execution_mode
         self.live_settings.enabled = False
         self.live_execution_enabled = False
+        self.live_execution_service = None
         self.dual_execution_mode = False
         self.shadow_live_mode = False
         self.requested_execution_mode = requested_execution_mode
