@@ -42,6 +42,7 @@ GOLD    = "#D1980B"
 
 
 _QUICK_CHARTS_DIR = Path(__file__).parent.parent / "reports" / "quick_charts"
+_MONTH_YEAR_LABEL = "%b '%y"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,7 +237,7 @@ def generate_quick_chart(
         ax.grid(True, color=BORDER, linewidth=0.3, alpha=0.4)
         if show_date_axis:
             ax.xaxis.set_major_locator(mdates.MonthLocator())
-            ax.xaxis.set_major_formatter(mdates.DateFormatter("%-b '%y"))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter(_MONTH_YEAR_LABEL))
             plt.setp(ax.xaxis.get_majorticklabels(), rotation=35, ha="right",
                      fontsize=7)
         else:
@@ -367,7 +368,7 @@ def generate_quick_chart(
 
     # Shared date axis on bottom chart
     ax_dd.xaxis.set_major_locator(mdates.MonthLocator())
-    ax_dd.xaxis.set_major_formatter(mdates.DateFormatter("%-b '%y"))
+    ax_dd.xaxis.set_major_formatter(mdates.DateFormatter(_MONTH_YEAR_LABEL))
     plt.setp(ax_dd.xaxis.get_majorticklabels(), rotation=35, ha="right", fontsize=7)
 
     # ── Stats panel ───────────────────────────────────────────────────────────
