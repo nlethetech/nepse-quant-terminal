@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime
 
@@ -99,6 +100,66 @@ def test_run_strategy_backtest_does_not_require_private_temp_runner(monkeypatch,
     assert metrics["vs_nepse_pct_points"] == 5.0
     assert metrics["trade_count"] == metrics["total_trades"]
     assert metrics["sharpe_ratio"] == metrics["sharpe"]
+
+
+def test_load_strategy_chart_result_uses_comparison_snapshot_when_latest_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(strategy_registry, "BACKTEST_RESULTS_DIR", tmp_path)
+    comparison_path = tmp_path / "registry_strategies_vs_nepse_latest.json"
+    monkeypatch.setattr(strategy_registry, "COMPARISON_LATEST_JSON", comparison_path)
+    comparison_path.write_text(
+        json.dumps(
+            {
+                "window": {"start": "2026-01-01", "end": "2026-01-08", "capital": 1000.0},
+                "nepse": {"return_pct": 2.0},
+                "generated_at": "2026-01-08T12:00:00",
+                "strategies": [
+                    {
+                        "id": "demo",
+                        "name": "Demo",
+                        "summary": {
+                            "total_return_pct": 5.0,
+                            "daily_nav": [
+                                ["2026-01-01", 1000.0],
+                                ["2026-01-02", 1010.0],
+                                ["2026-01-05", 1020.0],
+                                ["2026-01-06", 1030.0],
+                                ["2026-01-07", 1040.0],
+                                ["2026-01-08", 1050.0],
+                            ],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = strategy_registry.load_strategy_chart_result("demo")
+
+    assert payload is not None
+    assert payload["strategy"]["id"] == "demo"
+    assert payload["window"]["start"] == "2026-01-01"
+    assert payload["nepse"]["return_pct"] == 2.0
+    assert payload["summary"]["daily_nav"][-1] == ["2026-01-08", 1050.0]
+
+
+def test_load_strategy_chart_result_ignores_metric_only_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(strategy_registry, "BACKTEST_RESULTS_DIR", tmp_path)
+    comparison_path = tmp_path / "registry_strategies_vs_nepse_latest.json"
+    monkeypatch.setattr(strategy_registry, "COMPARISON_LATEST_JSON", comparison_path)
+    comparison_path.write_text(
+        json.dumps(
+            {
+                "window": {"start": "2026-01-01", "end": "2026-01-08"},
+                "strategies": [
+                    {"id": "demo", "name": "Demo", "summary": {"total_return_pct": 5.0}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert strategy_registry.load_strategy_chart_result("demo") is None
 
 
 def test_run_backtest_broker_exit_uses_public_db_path(monkeypatch, tmp_path):

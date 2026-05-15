@@ -339,6 +339,50 @@ def load_strategy_backtest_result(strategy_id: str) -> Optional[Dict[str, Any]]:
     return payload
 
 
+def _row_chart_payload(row: Dict[str, Any], *, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    strategy = dict(row.get("strategy") or {})
+    sid = str(strategy.get("id") or row.get("id") or "").strip()
+    if not sid:
+        return None
+    strategy.setdefault("id", sid)
+    strategy.setdefault("name", str(row.get("name") or sid))
+    summary = dict(row.get("summary") or {})
+    if not summary:
+        summary = {k: v for k, v in row.items() if k not in {"strategy", "window", "nepse"}}
+    if "daily_nav" not in summary and row.get("daily_nav") is not None:
+        summary["daily_nav"] = row.get("daily_nav")
+    if len(list(summary.get("daily_nav") or [])) < 5:
+        return None
+    return {
+        "strategy": strategy,
+        "window": dict(row.get("window") or snapshot.get("window") or {}),
+        "nepse": dict(row.get("nepse") or snapshot.get("nepse") or {}),
+        "summary": summary,
+        "generated_at": str(row.get("generated_at") or snapshot.get("generated_at") or ""),
+    }
+
+
+def load_strategy_chart_result(strategy_id: str) -> Optional[Dict[str, Any]]:
+    """Load a saved backtest artifact with enough data to render a quick chart."""
+    sid = str(strategy_id or "").strip()
+    if not sid:
+        return None
+    latest = load_strategy_backtest_result(sid)
+    if latest and len(list((latest.get("summary") or {}).get("daily_nav") or [])) >= 5:
+        return latest
+
+    snapshot = load_strategy_comparison_snapshot()
+    if not snapshot:
+        return None
+    for row in list(snapshot.get("strategies") or []):
+        if not isinstance(row, dict):
+            continue
+        row_sid = str((row.get("strategy") or {}).get("id") or row.get("id") or "").strip()
+        if row_sid == sid:
+            return _row_chart_payload(row, snapshot=snapshot)
+    return None
+
+
 def _normalize_metrics(metrics: Dict[str, Any], *, window: Dict[str, Any], nepse: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(metrics or {})
     if "sharpe_ratio" not in row and "sharpe" in row:
