@@ -61,3 +61,6 @@ Thumbs.db
 
 # === Node (if any frontend tooling) ===
 node_modules/
+
+# Local signing keys and issued licences
+secrets/

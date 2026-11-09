@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+"""Run the NEPSE Quant connection command from the repository root."""
+from apps.cli.connect import main
+
+raise SystemExit(main())

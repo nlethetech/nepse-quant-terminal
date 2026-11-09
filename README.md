@@ -2,9 +2,30 @@
 
 A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NEPSE), built with [Textual](https://textual.textualize.io/). Runs entirely in your terminal — no browser, no electron, no cloud dependency.
 
-**Paper trading only.** This terminal simulates trades locally. It does not connect to any broker API.
+**Paper trading only.** This terminal simulates trades locally and places no real orders. It can optionally [connect to your NEPSE Quant account](#connect-to-nepse-quant) to show your portfolios, read-only.
+
+**Prefer no setup?** The full web terminal is free at **[nepsequant.com](https://nepsequant.com)**: markets, broker flow, floorsheet, paper trading, risk and backtests.
 
 > ⚠️ **Disclaimer — read this first.** This is an **educational research tool, not financial advice.** It does not connect to a broker and cannot place real orders. The bundled backtest figures are **in-sample / historical** — they come from a parameter sweep, are **not** corrected for the number of strategy variants tried, and the repo ships **no artifact that reproduces them as forward-tested returns.** Treat them as a demonstration of the tooling, not as proof of an edge. Past performance does not indicate future results. Nothing here is a recommendation to buy or sell any security. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md).
+
+---
+
+## Connect to NEPSE Quant
+
+See your [nepsequant.com](https://nepsequant.com) paper and real portfolios from this terminal.
+
+1. Sign in at [nepsequant.com](https://nepsequant.com) and create a key under **Settings**.
+2. From the repository folder:
+
+```bash
+./nqt-connect login     # paste the key; it stays hidden
+./nqt-connect paper     # your paper portfolio
+./nqt-connect real      # your real portfolio
+./nqt-connect status
+./nqt-connect logout
+```
+
+The connection is read-only: it cannot place orders or change anything. The key is stored on your computer with owner-only permissions, is only sent to nepsequant.com over HTTPS, and can be revoked on the website at any time. The local paper account in this terminal stays separate from your website paper account.
 
 ---
 
