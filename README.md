@@ -6,6 +6,8 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 
 **Prefer no setup?** The full web terminal is free at **[nepsequant.com](https://nepsequant.com)**: markets, broker flow, floorsheet, paper trading, risk and backtests.
 
+> **Status:** this terminal is still being improved. We are fixing a few known bugs and working toward full parity with [nepsequant.com](https://nepsequant.com), so some website features are not here yet. For the most complete version today, use the website.
+
 > ⚠️ **Disclaimer — read this first.** This is an **educational research tool, not financial advice.** It does not connect to a broker and cannot place real orders. The bundled backtest figures are **in-sample / historical** — they come from a parameter sweep, are **not** corrected for the number of strategy variants tried, and the repo ships **no artifact that reproduces them as forward-tested returns.** Treat them as a demonstration of the tooling, not as proof of an edge. Past performance does not indicate future results. Nothing here is a recommendation to buy or sell any security. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md).
 
 ---
