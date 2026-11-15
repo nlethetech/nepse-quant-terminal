@@ -69,3 +69,28 @@ def test_portfolio_display_and_json(monkeypatch, capsys):
     assert "virtual money" in out and "NABIL" in out and "-10.00%" in out and "nepsequant.com" in out
     assert connect.main(["paper", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["value"] == 1000.0
+
+
+@pytest.mark.parametrize(
+    ("scopes", "access"),
+    [("read", "read only"), ("read,paper", "read + paper trading")],
+)
+def test_status_says_whether_the_key_can_trade(monkeypatch, capsys, scopes, access):
+    connect.save_key("nqk_abc")
+    monkeypatch.setattr(connect, "request_json", lambda path, key, **kw: {"ok": True, "user": "s***@example.com", "scopes": scopes})
+    assert connect.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert f"as s***@example.com ({access})" in out
+    assert ("Paper trading ticked" in out) is (scopes == "read")
+
+
+def test_refusals_carry_the_websites_reason(monkeypatch):
+    import io
+    import urllib.error
+
+    def refuse(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, io.BytesIO(b'{"detail": "This key can only read."}'))
+
+    monkeypatch.setattr(connect.urllib.request, "urlopen", refuse)
+    with pytest.raises(connect.ConnectError, match="This key can only read."):
+        connect.request_json("/api/cli/paper/orders", "nqk_abc", method="POST", body={"action": "BUY"})

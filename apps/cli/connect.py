@@ -6,8 +6,11 @@
     ./nqt-connect real       show your real portfolio
     ./nqt-connect logout     remove the saved key
 
-The connection is read-only. The key is saved on this computer with
-owner-only permissions and is only ever sent to nepsequant.com.
+With a key made with "Paper trading" ticked, the terminal also uses your
+nepsequant.com paper portfolio as its paper book (apps/tui/io/website_book.py):
+one book on the website and here. This command line itself only reads. The key
+is saved on this computer with owner-only permissions and is only ever sent to
+nepsequant.com.
 """
 
 from __future__ import annotations
@@ -72,19 +75,39 @@ def load_key() -> str:
     return key
 
 
-def request_json(path: str, key: str) -> dict[str, Any]:
-    req = urllib.request.Request(
-        base_url() + path,
-        headers={"Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": USER_AGENT},
-    )
+def _detail(exc: urllib.error.HTTPError) -> str:
+    """The website's own one-line explanation of a refusal, when it sent one."""
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as response:  # noqa: S310 - scheme checked in base_url
+        detail = json.loads(exc.read().decode("utf-8")).get("detail")
+    except Exception:
+        return ""
+    return detail.strip() if isinstance(detail, str) else ""
+
+
+def request_json(
+    path: str,
+    key: str,
+    *,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    timeout: float = TIMEOUT_S,
+) -> dict[str, Any]:
+    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": USER_AGENT}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(base_url() + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:  # noqa: S310 - scheme checked in base_url
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             raise ConnectError(f"That key was not accepted. Create a new one at {KEYS_PAGE}") from exc
         if exc.code == 429:
-            raise ConnectError("Too many requests. Wait a minute and try again.") from exc
+            raise ConnectError(_detail(exc) or "Too many requests. Wait a minute and try again.") from exc
+        if exc.code in (403, 404, 409, 422, 428):
+            raise ConnectError(_detail(exc) or f"NEPSE Quant refused the request ({exc.code}).") from exc
         raise ConnectError(f"NEPSE Quant answered with an error ({exc.code}). Try again shortly.") from exc
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         raise ConnectError(f"Could not reach {base_url()}. Check your connection and try again.") from exc
@@ -142,7 +165,7 @@ def login(key: str | None) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="nqt-connect", description="Connect this terminal to nepsequant.com (read-only).")
+    parser = argparse.ArgumentParser(prog="nqt-connect", description="Connect this terminal to your nepsequant.com account.")
     commands = parser.add_subparsers(dest="command", required=True)
     login_parser = commands.add_parser("login", help="save a personal key from nepsequant.com")
     login_parser.add_argument("--key", help="the key; omit to be asked without it showing on screen")
@@ -161,7 +184,12 @@ def main(argv: list[str] | None = None) -> int:
             print("Disconnected. To cancel the key itself, revoke it at " + KEYS_PAGE)
         elif args.command == "status":
             info = request_json("/api/keys/verify", load_key())
-            print(f"Connected to {base_url()} as {info.get('email') or 'your account'} ({info.get('scopes') or 'read'} access)")
+            scopes = {s.strip() for s in str(info.get("scopes") or "read").split(",")}
+            access = "read + paper trading" if "paper" in scopes else "read only"
+            who = info.get("user") or info.get("email") or "your account"
+            print(f"Connected to {base_url()} as {who} ({access})")
+            if "paper" not in scopes:
+                print(f"To trade your paper book from the terminal, create a key with Paper trading ticked at {KEYS_PAGE}")
         else:
             data = request_json(f"/api/cli/account?book={args.command}", load_key())
             print(json.dumps(data, indent=2) if args.json else render_account(data))

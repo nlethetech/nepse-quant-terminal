@@ -2,7 +2,7 @@
 
 A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NEPSE), built with [Textual](https://textual.textualize.io/). Runs entirely in your terminal — no browser, no electron, no cloud dependency.
 
-**Paper trading only.** This terminal simulates trades locally and places no real orders. It can optionally [connect to your NEPSE Quant account](#connect-to-nepse-quant) to show your portfolios, read-only.
+**Paper trading only.** This terminal places no real orders. On its own it keeps a local paper book; [connected to your NEPSE Quant account](#connect-to-nepse-quant) it uses your nepsequant.com paper portfolio instead, so the terminal and the website share one paper book.
 
 **Prefer no setup?** The full web terminal is free at **[nepsequant.com](https://nepsequant.com)**: markets, broker flow, floorsheet, paper trading, risk and backtests.
 
@@ -14,20 +14,27 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 
 ## Connect to NEPSE Quant
 
-See your [nepsequant.com](https://nepsequant.com) paper and real portfolios from this terminal.
+Use your [nepsequant.com](https://nepsequant.com) paper portfolio as the terminal's paper book: one book on the website, your phone and this terminal.
 
-1. Sign in at [nepsequant.com](https://nepsequant.com) and create a key under **Settings**.
+1. Sign in at [nepsequant.com](https://nepsequant.com) and create a key under **Settings**. Tick **Paper trading** so the terminal can place paper orders (if you don't see the option yet, it is still being rolled out; a key without it shows your book read-only).
 2. From the repository folder:
 
 ```bash
 ./nqt-connect login     # paste the key; it stays hidden
-./nqt-connect paper     # your paper portfolio
-./nqt-connect real      # your real portfolio
-./nqt-connect status
-./nqt-connect logout
+./nqt-connect status    # which account, and whether the key can trade
+./nqt-connect paper     # your paper portfolio, as text
+./nqt-connect real      # your real portfolio (read-only)
+./nqt-connect logout    # back to the terminal's own local paper book
 ```
 
-The connection is read-only: it cannot place orders or change anything. The key is stored on your computer with owner-only permissions, is only sent to nepsequant.com over HTTPS, and can be revoked on the website at any time. The local paper account in this terminal stays separate from your website paper account.
+Then start the terminal as usual. While connected:
+
+- **Portfolio, Orders and Trades show your nepsequant.com paper book**, refreshed every 30 seconds.
+- **Orders you place go to the website's paper simulator**: leave the price empty for a market order, type a price for a limit order. The website applies its rules (NEPSE hours, Rs 0.10 ticks, price band, T+2, fees and capital gains tax), so a fill here is the same fill you see on the website.
+- **Automatic trading is off**: the auto-trading engine and agent auto-orders only run on a local book.
+- **Virtual money only.** Nothing here can reach a broker.
+
+The key is stored on your computer with owner-only permissions, is only sent to nepsequant.com over HTTPS, and can be revoked on the website at any time. To keep the local paper book while a key is saved, start with `NQT_SHARED_BOOK=0`.
 
 ---
 
