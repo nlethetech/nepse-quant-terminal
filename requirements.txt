@@ -30,6 +30,10 @@ plotly>=5.0
 # ── Telegram alerts (optional) ────────────────────────────────────────────────
 python-telegram-bot>=20.0
 
+# ── AI agent — cloud models on your own key (optional) ───────────────────────
+# Claude (Anthropic API). OpenAI needs no extra package; Ollama needs none either.
+anthropic>=2.0,<3
+
 # ── AI agent — local models (optional, Apple Silicon only) ───────────────────
 # Uncomment to use Gemma 4 via MLX:
 # mlx-lm>=0.10

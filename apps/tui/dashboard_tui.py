@@ -430,6 +430,8 @@ class NepseDashboard(
     _agent_chat_process: Optional[subprocess.Popen] = None
     _agent_chat_request_id: int = 0
     _agent_chat_stop_requested: bool = False
+    _agent_chat_busy: bool = False
+    _agent_analysis_running: bool = False
     _screener_sort: str = "chg"  # screener sort column
     _screener_filter: str = ""   # screener sector filter
     _refresh_inflight: bool = False
@@ -550,7 +552,7 @@ class NepseDashboard(
                             yield Static("COMPOSER", classes="panel-title", id="agent-compose-title")
                             with Vertical(id="agent-chat-footer"):
                                 yield Static("", id="agent-chat-hint")
-                                yield Input(id="agent-input", placeholder="Ask the agent...  (/agent list, /model gemma4:e2b, /stop)")
+                                yield Input(id="agent-input", placeholder="Ask the agent...  (/agent list, /agent openai, /model <name>, /stop)")
 
             # ── 6 ORDERS (Order Management) ──
             with Vertical(id="orders", classes="tab-pane"):

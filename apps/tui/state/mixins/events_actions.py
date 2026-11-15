@@ -463,6 +463,8 @@ class EventsActionsMixin:
         if not question:
             return
         event.input.value = ""
+        if self._refuse_secret_in_composer(question):
+            return  # looked like an API key: not sent, not saved
         if question.upper() == "A":
             self._run_agent_analysis()
         elif question.startswith("/"):
