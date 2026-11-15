@@ -37,6 +37,15 @@ from typing import Any, Optional
 
 from backend.quant_pro.paths import ensure_dir, get_runtime_dir
 
+try:  # one auto-trader at a time across terminal windows
+    import fcntl  # macOS / Linux
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+try:  # pragma: no cover - Windows only
+    import msvcrt
+except ImportError:
+    msvcrt = None
+
 STATE_FILE = Path(get_runtime_dir(__file__)) / "website_book" / "autotrader.json"
 STALE_PICKS_DAYS = 4  # weekdays: older picks are not bought
 FEE_BUFFER = 0.985  # leave room for broker commission, SEBON fee and DP charge
@@ -231,8 +240,37 @@ class AutoTrader:
     def enabled(self) -> bool:
         return bool(self.state.get("enabled"))
 
+    def _other_window_lock(self):
+        """An exclusive lock shared by every terminal window on this computer,
+        so two open terminals can never auto-trade (and double-buy) at once.
+        Returns the open lock file, or None when another window holds it."""
+        ensure_dir(self._path.parent)
+        handle = open(self._path.with_suffix(".lock"), "a+")
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            elif msvcrt is not None:  # pragma: no cover
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            handle.close()
+            return None
+        return handle
+
+    @staticmethod
+    def _release(handle) -> None:
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            elif msvcrt is not None:  # pragma: no cover
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            handle.close()
+
     def set_enabled(self, on: bool, strategy_id: Optional[str]) -> None:
         with self._lock:
+            self.state = self._load()  # another window may have changed it
             if strategy_id != self.state.get("strategy_id"):
                 # a new strategy: keep managing what we bought, rebalance afresh
                 self.state["strategy_id"] = strategy_id
@@ -250,13 +288,20 @@ class AutoTrader:
         """One pass. Returns the lines worth showing; never raises."""
         if not self._lock.acquire(blocking=False):
             return []
+        handle = None
         try:
+            handle = self._other_window_lock()
+            if handle is None:
+                return []  # another terminal window is auto-trading right now
+            self.state = self._load()  # pick up what other windows recorded
             return self._run(book=book, strategies=strategies, today=today)
         except Exception as exc:  # a bad pass must never take the terminal down
             self._log(f"Auto-trade error: {exc}")
             self.save()
             return [f"Auto-trade error: {exc}"]
         finally:
+            if handle is not None:
+                self._release(handle)
             self._lock.release()
 
     def _run(self, *, book: Any, strategies: Any, today: date) -> list[str]:

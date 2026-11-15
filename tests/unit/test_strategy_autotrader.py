@@ -285,3 +285,24 @@ def test_client_lists_assigns_and_caches_picks():
     assert sum(1 for c in calls if "signals" in c[1]) == 1  # cached
     lines = ws.describe(client.get("rs:a"))
     assert lines[0].startswith("Value banks") and any("Trading rules (default)" in line for line in lines)
+
+
+def test_two_terminal_windows_never_auto_trade_at_once(tmp_path):
+    window_a = _trader(tmp_path)
+    window_a.set_enabled(True, "rs:a")
+    window_b = _trader(tmp_path)  # a second window, same account and state file
+    assert window_b.enabled  # sees the switch made in the other window
+    held = window_a._other_window_lock()  # window A is mid-pass
+    try:
+        book = FakeBook()
+        assert window_b.run_once(book=book, strategies=FakeStrategies(), today=TODAY) == []
+        assert book.sent == []
+    finally:
+        window_a._release(held)
+    book = FakeBook()
+    window_b.run_once(book=book, strategies=FakeStrategies(), today=TODAY)
+    assert [s[1] for s in book.sent] == ["AAA", "REFUSE"]
+    # window A, next pass: reloads what B recorded, so it does not buy again
+    book_a = FakeBook(positions=[_pos("AAA", qty=2475, cost=101.0, last=101.0)])
+    window_a.run_once(book=book_a, strategies=FakeStrategies(), today=TODAY)
+    assert book_a.sent == []
