@@ -1669,3 +1669,24 @@ ModalDialog {
     color: #fff6de;
     border: none;
 }
+
+
+/* Linked to nepsequant.com: the website-strategy panel replaces the builder. */
+#webstrat-panel {
+    display: none;
+    height: 1fr;
+    padding: 0 1;
+}
+#webstrat-detail {
+    height: auto;
+    padding: 1 0;
+    color: #d7dde5;
+}
+#webstrat-actions {
+    height: auto;
+    margin: 0 0 1 0;
+}
+#webstrat-log {
+    height: 1fr;
+    color: #8a8a8a;
+}

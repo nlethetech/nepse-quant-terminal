@@ -151,6 +151,10 @@ class WebsiteBook:
     def cash(self) -> float:
         return _f(self._snap.account.get("cash"))
 
+    def value(self) -> float:
+        """The book's total value (cash + holdings) as the website reports it."""
+        return _f(self._snap.account.get("value"))
+
     def starting_cash(self) -> float:
         return _f(self._snap.account.get("starting_cash")) or 1_000_000.0
 

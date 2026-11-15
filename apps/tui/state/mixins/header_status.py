@@ -18,6 +18,9 @@ class HeaderStatusMixin:
         return False
 
     def _display_mode_label(self) -> str:
+        if self._website_book is not None:
+            trader = self._autotrader
+            return "PAPER · AUTO-TRADE" if trader is not None and trader.enabled else "PAPER · NEPSEQUANT.COM"
         return "PAPER AUTO"
 
     def _update_header(self):
@@ -26,7 +29,7 @@ class HeaderStatusMixin:
         from apps.tui.dashboard_tui import TAB_LABELS, TAB_NAMES
         parts = []
         # Mode indicator
-        parts.append("[bold #111820 on #79ffb3] PAPER AUTO [/]")
+        parts.append(f"[bold #111820 on #79ffb3] {self._display_mode_label()} [/]")
         for name, key in TAB_NAMES.items():
             label = TAB_LABELS.get(name, name.upper())
             if name == self.active_tab:

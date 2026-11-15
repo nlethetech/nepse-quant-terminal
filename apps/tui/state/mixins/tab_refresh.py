@@ -372,6 +372,7 @@ class TabRefreshMixin:
             self.md.refresh()
             if self._website_book is not None:
                 self._website_book.refresh()  # the shared nepsequant.com paper book
+                self._run_autotrader_pass()  # the assigned strategy, when auto-trade is on
             from apps.tui.dashboard_tui import _fetch_osint_stories
             self._osint_stories = _fetch_osint_stories(80)
 
@@ -400,6 +401,15 @@ class TabRefreshMixin:
         self.call_from_thread(self._update_index)
     @work(thread=True)
     def _load_signals_async(self, force: bool = False) -> None:
+        strategies = self._website_strategies
+        if strategies is not None:
+            # Linked: the assigned nepsequant.com strategy's picks for today.
+            if not strategies.loaded:
+                strategies.refresh()
+            if strategies.assigned:
+                strategies.picks(strategies.assigned, force=force)
+            self.call_from_thread(self._render_website_signals)
+            return
         cache_key = self._signals_cache_key()
         if (
             not force
@@ -1441,6 +1451,9 @@ class TabRefreshMixin:
         except Exception:
             pass
     def _populate_strategies_tab(self) -> None:
+        if self._website_strategies is not None:
+            self._populate_website_strategies_tab()
+            return
         if not getattr(self, "_strategies", None):
             self._load_strategies_registry()
         self._populate_strategy_list()

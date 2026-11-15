@@ -104,6 +104,7 @@ class LifecycleMixin:
         # book is the terminal's paper book; it is fetched in the background.
         from apps.tui.io.website_book import WebsiteBook
         self._website_book = WebsiteBook.from_saved() if self.trade_mode == "paper" else None
+        self._init_website_strategies()
         self._build_ticker()
         self._update_header()
         self._update_index()
@@ -182,6 +183,7 @@ class LifecycleMixin:
         self._populate_portfolio_and_risk()
         self._populate_trades_full()
         self._refresh_active_tab_view()
+        self._load_website_strategies(True)
 
     def on_unmount(self) -> None:
         """Graceful shutdown — stop trading engine."""
