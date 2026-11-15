@@ -122,11 +122,10 @@ def _safe_float(value) -> Optional[float]:
 
 
 def _annualize_eps(eps: Optional[float], quarter: Optional[int]) -> Optional[float]:
-    if eps is None:
-        return None
-    if not quarter or quarter <= 0:
-        return eps
-    return eps * (4.0 / quarter)
+    # quarterly_earnings.eps is already annualized (ShareSansar/MeroLagani publish
+    # "EPS (annualized)"; MeroLagani's own P/E = price / this value). Scaling by
+    # 4/quarter double-counted Q2 and quadrupled Q1, halving P/E for every stock.
+    return eps
 
 
 def _growth_ratio(current: Optional[float], previous: Optional[float]) -> Optional[float]:

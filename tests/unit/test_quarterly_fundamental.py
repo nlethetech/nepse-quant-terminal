@@ -56,8 +56,8 @@ def test_build_fundamentals_respects_point_in_time_announcement_dates():
         sector_lookup=lambda _symbol: "Commercial Banks",
         symbols=["AAA"],
     )["AAA"]
-    assert round(early.eps, 2) == 40.0
-    assert round(early.pe_ratio, 2) == 10.0
+    assert round(early.eps, 2) == 10.0  # EPS stored already annualized
+    assert round(early.pe_ratio, 2) == 40.0
     assert early.eps_growth_qoq is None
 
     later = model.build_fundamentals(
@@ -66,7 +66,7 @@ def test_build_fundamentals_respects_point_in_time_announcement_dates():
         sector_lookup=lambda _symbol: "Commercial Banks",
         symbols=["AAA"],
     )["AAA"]
-    assert round(later.eps, 2) == 28.0
+    assert round(later.eps, 2) == 14.0
     assert round(later.eps_growth_qoq, 2) == 0.40
     assert round(later.revenue_growth_qoq, 2) == 0.20
     assert round(later.book_value_growth_qoq, 2) == 0.10

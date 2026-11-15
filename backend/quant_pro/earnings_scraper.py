@@ -101,10 +101,9 @@ TARGET_SYMBOLS: List[str] = [
 # ---------------------------------------------------------------------------
 
 def _get_db_path() -> str:
-    """Resolve the database file path."""
-    import os
-    raw = os.environ.get("NEPSE_DB_FILE", "nepse_market_data.db")
-    return str(Path(raw).resolve())
+    """Resolve the database file path (NEPSE_DB_FILE or data/nepse_market_data.db)."""
+    from backend.quant_pro.database import get_db_path
+    return str(get_db_path())
 
 
 def create_quarterly_earnings_table(db_path: Optional[str] = None) -> None:
