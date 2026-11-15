@@ -1669,3 +1669,15 @@ ModalDialog {
     color: #fff6de;
     border: none;
 }
+
+/* Every scrollbar grey (pure greys stay grey in 256-colour terminals such as
+   macOS Terminal; Textual's default is blue). Specific rules above still win. */
+* {
+    scrollbar-background: #0a0a0a;
+    scrollbar-background-hover: #0a0a0a;
+    scrollbar-background-active: #0a0a0a;
+    scrollbar-color: #3a3a3a;
+    scrollbar-color-hover: #5c5c5c;
+    scrollbar-color-active: #f2b94b;
+    scrollbar-corner-color: #0a0a0a;
+}
