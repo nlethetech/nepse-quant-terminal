@@ -45,12 +45,12 @@ def _f(value: Any) -> Optional[float]:
         return None
 
 
-def _pct(value: Any) -> Optional[float]:
-    """A percentage as percent, whether the website sent 0.08 or 8."""
+def _sector_pct(value: Any) -> Optional[float]:
+    """The website sends the sector cap as a fraction (0.35 = 35%)."""
     v = _f(value)
     if v is None:
         return None
-    return v * 100.0 if 0 < abs(v) <= 1.0 else v
+    return v * 100.0 if 0 < v <= 1.0 else v
 
 
 def trading_params(strategy: dict[str, Any]) -> tuple[dict[str, float], str]:
@@ -63,11 +63,16 @@ def trading_params(strategy: dict[str, Any]) -> tuple[dict[str, float], str]:
         if v is not None and v > 0:
             out[key] = int(v)
             used = True
-    for key in ("stop_loss_pct", "trailing_stop_pct", "sector_limit"):
-        v = _pct(raw.get(key))
+    # *_pct fields arrive in percent (8.0 = 8%); the sector cap as a fraction.
+    for key in ("stop_loss_pct", "trailing_stop_pct"):
+        v = _f(raw.get(key))
         if v is not None and v >= 0:
             out[key] = v
             used = True
+    v = _sector_pct(raw.get("sector_limit"))
+    if v is not None and v > 0:
+        out["sector_limit"] = v
+        used = True
     source = str(strategy.get("params_source") or "") if used else "default"
     return out, (source or "strategy")
 

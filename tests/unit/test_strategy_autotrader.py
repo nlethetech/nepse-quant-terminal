@@ -153,9 +153,10 @@ def test_plan_does_not_mutate_the_callers_state():
 
 
 def test_trading_params_from_strategy_or_defaults():
-    params, source = ws.trading_params({"params": {"max_positions": 6, "stop_loss_pct": 0.05, "trailing_stop_pct": 12},
-                                        "params_source": "backtest"})
-    assert params["max_positions"] == 6 and params["stop_loss_pct"] == 5.0 and params["trailing_stop_pct"] == 12.0
+    params, source = ws.trading_params({"params": {"max_positions": 6, "stop_loss_pct": 1.0, "trailing_stop_pct": 12,
+                                                   "sector_limit": 0.35}, "params_source": "backtest"})
+    assert params["max_positions"] == 6 and params["stop_loss_pct"] == 1.0 and params["trailing_stop_pct"] == 12.0
+    assert params["sector_limit"] == 35.0
     assert params["rebalance_days"] == ws.DEFAULT_PARAMS["rebalance_days"] and source == "backtest"
     params, source = ws.trading_params({"params": None})
     assert params == ws.DEFAULT_PARAMS and source == "default"

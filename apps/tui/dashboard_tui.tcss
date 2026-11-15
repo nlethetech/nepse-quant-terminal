@@ -1689,6 +1689,8 @@ ModalDialog {
 #webstrat-log {
     height: 1fr;
     color: #8a8a8a;
+}
+
 /* Every scrollbar grey (pure greys stay grey in 256-colour terminals such as
    macOS Terminal; Textual's default is blue). Specific rules above still win. */
 * {
