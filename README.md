@@ -46,7 +46,7 @@ The key is stored on your computer with owner-only permissions, is only sent to 
 - **Market Dashboard** — live quotes, 52-week highs/lows, top movers, sector heatmap, volume signals.
 - **Portfolio Analytics** — unrealized/realized P&L, sector concentration, holding age buckets, max drawdown, alpha vs. NEPSE benchmark.
 - **Gold Hedge Overlay** — tracks gold/silver regime (risk-on / neutral / risk-off) and adjusts capital deployment accordingly.
-- **AI Agent** — on-demand analysis of your portfolio positions and signal shortlist. Defaults to a local Ollama model, with Gemma 4 MLX or Claude CLI available as optional backends.
+- **AI Agent** — on-demand analysis of your portfolio positions and signal shortlist. Defaults to a local Ollama model; OpenAI or Claude on your own API key, Gemma 4 MLX or the Claude CLI are optional backends. When the terminal is linked to nepsequant.com it also reads NEPSE Quant's market briefing and news.
 - **Paper Agent Graph** — cleaned evidence-gated research, debate, risk, and portfolio decision workflow for paper execution only.
 - **Strategy Builder** — create, backtest, and assign custom strategies. Each account runs its own strategy independently.
 - **Statistical Validation** — walk-forward replay across rolling subwindows, Monte Carlo, CSCV/PBO overfitting detection, deflated Sharpe ratio, random baseline percentile. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md) for what each test does and does not prove.
@@ -96,7 +96,7 @@ The public agent workflow is evidence-gated, checkpointed, and restricted to pap
 | Market Data | `backend/market/` | Price DB queries, quote scraping, 52wk calculations |
 | Validation | `validation/` | Walk-forward, Monte Carlo, CSCV, DSR, random baseline |
 | Gold Hedge | `backend/quant_pro/gold_hedge.py` | Gold/silver regime detection → capital deployment % |
-| AI Agent | `backend/agents/agent_analyst.py` | Ollama-first portfolio and signal analysis |
+| AI Agent | `backend/agents/agent_analyst.py` (+ `llm_ollama.py`, `llm_openai.py`, `llm_anthropic.py`, `nepse_briefing.py`) | Portfolio and signal analysis on Ollama, OpenAI or Claude |
 | Paper Agent Graph | `backend/nepse_agents/` | Evidence-gated research/debate/risk/portfolio workflow; paper-only |
 | NEPSE Calendar | `backend/quant_pro/nepse_calendar.py` | Trading-day week (Mon–Fri default), public holidays, trading day counter |
 
@@ -339,7 +339,30 @@ Paper strategy autopilot is broker-free. Manual orders and strategy orders use t
 
 ## AI Agent Setup
 
-The Agents tab provides on-demand equity analysis of your signal shortlist and portfolio. Ollama is the default backend; Gemma 4 MLX and Claude CLI are optional.
+The Agents tab provides on-demand equity analysis of your signal shortlist and portfolio. Ollama is the default backend; OpenAI, Claude (Anthropic API), Gemma 4 MLX and the Claude CLI are optional.
+
+### AI analyst: Ollama, OpenAI or Claude
+
+Pick the AI once, from the repository folder:
+
+```bash
+./nqt-connect ai setup     # choose ollama, openai or anthropic; paste the key (hidden); Enter keeps the default model
+./nqt-connect ai status    # provider, model, and whether a key is saved (the key itself is never shown)
+./nqt-connect ai off       # delete saved keys and go back to local Ollama
+```
+
+| Provider | Default model | Cost | Needs |
+|---|---|---|---|
+| `ollama` | `llama3` (uses an installed model if that one is missing) | free, runs on your computer | [Ollama](https://ollama.com) and `ollama pull llama3.2` |
+| `openai` | `gpt-5-mini` | billed to your OpenAI key | an OpenAI API key |
+| `anthropic` | `claude-opus-5-5` (low-cost: `claude-haiku-5-5`) | billed to your Anthropic key | an Anthropic API key and `pip install anthropic` |
+
+Switch any time in the Agents tab (key 5): `/agent openai`, `/agent anthropic claude-haiku-5-5`, `/agent ollama llama3.2`, or `/model <name>` for the current provider. The header shows what is answering, e.g. `CLAUDE · claude-opus-5-5`.
+
+- **Costs are on your own key.** Each chat answer and each picks analysis is one request to your provider. The terminal keeps requests small (last few chat turns only, trimmed context, capped answer length, cached system prompt) and reuses a fresh analysis instead of re-running it.
+- **Keys stay on your computer**, in `~/.config/nepse-quant-terminal/ai.json` (owner-only permissions), and are sent only to the provider they belong to. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` environment variables take priority. Never paste a key into the chat box: the terminal refuses anything that looks like a key, because chat history is saved to disk.
+- **NEPSE Quant data:** when the terminal is linked (`./nqt-connect login`), the analyst also reads your account's market briefing from nepsequant.com (market phase, NEPSE close, regime, breadth, top movers, latest news with sources, disclosures), refreshed every five minutes, and can cite it. Not linked or offline: it simply works without it.
+- Same rules everywhere: paper trading only, the same analyst rules and verdict format, and the trade-approval veto. `OPENAI_BASE_URL` points `openai` at any OpenAI-compatible server; `OLLAMA_HOST` points `ollama` at another machine.
 
 ### Option 1 — Ollama (recommended, any hardware)
 
@@ -456,12 +479,14 @@ Then set `active_agent.json` backend to `"claude"`, or switch from the TUI:
 
 ### Switching backends at runtime
 
-All three backends are hot-swappable without restarting the terminal. In the Agents tab chat box:
+All backends are hot-swappable without restarting the terminal. In the Agents tab chat box:
 
 ```text
 /agent
 /agent list
 /agent ollama gemma4:e2b
+/agent openai gpt-5-mini
+/agent anthropic claude-opus-5-5
 /agent gemma4_mlx
 /agent claude
 /model qwen2
