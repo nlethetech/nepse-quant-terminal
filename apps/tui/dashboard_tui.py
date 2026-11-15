@@ -406,6 +406,9 @@ class NepseDashboard(
     _last_tms_watchlist_fetch_at: float = 0.0
     _tms_watchlist_refresh_inflight: bool = False
     _trading_engine: Optional[TUITradingEngine] = None
+    # The nepsequant.com paper book, when the terminal is linked (./nqt-connect
+    # login): then it is the terminal's ONLY paper book (apps/tui/io/website_book.py).
+    _website_book = None
     _account_engines: dict = {}  # account_id -> TUITradingEngine
     _news_search_query: str = ""  # current news search filter
     _vector_search_results: list = []  # semantic search results from OSINT API

@@ -512,6 +512,12 @@ def build_live_trader_control_plane(trader: Any) -> ControlPlaneCommandService:
 def build_tui_control_plane(dashboard: Any) -> ControlPlaneCommandService:
     cached = getattr(dashboard, "_control_plane_service", None)
     def _paper_submitter(action: str, symbol: str, qty: int, price: float):
+        if getattr(dashboard, "_website_book", None) is not None:
+            # The shared nepsequant.com paper book takes orders you place yourself.
+            return False, (
+                "Automatic orders are off while the terminal uses your nepsequant.com paper book. "
+                "Place the order yourself, or run ./nqt-connect logout to use a local paper book."
+            ), {"symbol": symbol, "quantity": qty, "limit_price": price}
         msg = dashboard._submit_paper_order(action, symbol, qty, price)
         return True, msg, {"symbol": symbol, "quantity": qty, "limit_price": price}
 

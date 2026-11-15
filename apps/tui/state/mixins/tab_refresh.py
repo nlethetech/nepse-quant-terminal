@@ -65,6 +65,7 @@ from apps.tui.io.stats import (
     _compute_portfolio_stats,
     _get_regime,
     _signal_label,
+    _stats_from_frames,
 )
 from apps.tui.io.intraday import (
     _ensure_lookup_history,
@@ -369,6 +370,8 @@ class TabRefreshMixin:
                 pass
 
             self.md.refresh()
+            if self._website_book is not None:
+                self._website_book.refresh()  # the shared nepsequant.com paper book
             from apps.tui.dashboard_tui import _fetch_osint_stories
             self._osint_stories = _fetch_osint_stories(80)
 
@@ -1082,7 +1085,19 @@ class TabRefreshMixin:
             [("SYMBOL", "sym"), ("LTP", "ltp"), ("CHG%", "chg"), ("VOL", "vol")],
             quote_rows)
     def _populate_portfolio_and_risk(self):
-        if self._trading_engine or self.trade_mode == "paper":
+        book = self._website_book
+        if book is not None and self.trade_mode == "paper":
+            # Linked to nepsequant.com: the website's paper book is the book.
+            self._stats = _stats_from_frames(
+                self.md,
+                book.portfolio_frame(),
+                book.nav_frame(),
+                book.trade_log_frame(),
+                account_capital=book.starting_cash(),
+                cash=book.cash(),
+                prefer_book_price=True,
+            )
+        elif self._trading_engine or self.trade_mode == "paper":
             # Always use account-specific paper_portfolio.csv as the authoritative view.
             # This captures both manual trades and any engine trades persisted there.
             # The engine's tui_paper_portfolio.csv is used only as a fallback.
@@ -1483,6 +1498,13 @@ class TabRefreshMixin:
             trade_log = pd.read_csv(trade_log_path) if trade_log_path.exists() else pd.DataFrame(columns=TRADE_LOG_COLS)
             nav_log = pd.read_csv(nav_log_path) if nav_log_path.exists() else pd.DataFrame(columns=NAV_LOG_COLS)
             state = load_runtime_state(str(state_path))
+        elif self._website_book is not None:
+            # linked: the account panel describes the shared nepsequant.com book
+            book = self._website_book
+            portfolio = book.portfolio_frame()
+            nav_log = book.nav_frame()
+            trade_log = book.trade_log_frame()
+            state = {"cash": book.cash()}
         else:
             portfolio = load_port()
             nav_log = _load_nav_log()
@@ -2364,12 +2386,14 @@ class TabRefreshMixin:
             dt.add_column(label, key=key)
         # Merge all trade log sources for the current account: engine (auto), paper (manual), tui (engine csv)
         _tl_sources: list[pd.DataFrame] = []
-        if self._trading_engine:
+        if self._website_book is not None:
+            _tl_sources.append(self._website_book.trade_log_frame())
+        elif self._trading_engine:
             _etl = self._trading_engine.get_trade_log()
             if not _etl.empty:
                 _tl_sources.append(_etl)
         _acc_tl_dir = _account_dir(self._current_account_id)
-        for _fname in ("paper_trade_log.csv", "tui_paper_trade_log.csv"):
+        for _fname in (() if self._website_book is not None else ("paper_trade_log.csv", "tui_paper_trade_log.csv")):
             _tl_path = _acc_tl_dir / _fname
             if _tl_path.exists():
                 try:
@@ -2378,7 +2402,9 @@ class TabRefreshMixin:
                         _tl_sources.append(_df)
                 except Exception:
                     pass
-        if _tl_sources:
+        if self._website_book is not None:
+            tl = _tl_sources[0]
+        elif _tl_sources:
             tl = pd.concat(_tl_sources, ignore_index=True)
             _dedup_keys = [c for c in ("Date", "Action", "Symbol", "Shares", "Price") if c in tl.columns]
             if _dedup_keys:

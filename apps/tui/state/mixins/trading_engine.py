@@ -166,6 +166,8 @@ class TradingEngineMixin:
 
     def _on_engine_portfolio_changed(self) -> None:
         """Called by engine when positions change — refresh portfolio display."""
+        if self._website_book is not None:
+            return  # the shared website book is the one on screen
         if self._trading_engine:
             self._stats = self._trading_engine.get_portfolio_stats()
             self._populate_portfolio_tab(self._stats)
