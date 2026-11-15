@@ -42,13 +42,48 @@ class ConnectError(Exception):
     """A problem the user can act on; shown without a traceback."""
 
 
+# Where a NEPSE Quant key may ever be sent: the website itself, or this
+# computer (a local copy of the website, for testing). Nothing else, whatever
+# NQT_BASE_URL says — so a wrong or planted setting cannot leak the key.
+ALLOWED_HOSTS = {"nepsequant.com", "www.nepsequant.com"}
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
 def base_url() -> str:
-    url = os.environ.get("NQT_BASE_URL", SITE).rstrip("/")
+    url = os.environ.get("NQT_BASE_URL", SITE).strip().rstrip("/")
     parsed = urllib.parse.urlparse(url)
-    local = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
-    if parsed.scheme != "https" and not local:
+    host = (parsed.hostname or "").lower()
+    if host in LOCAL_HOSTS and parsed.scheme in {"http", "https"}:
+        return url
+    if parsed.scheme != "https":
         raise ConnectError("NQT_BASE_URL must use https, so your key is never sent unencrypted.")
+    if host not in ALLOWED_HOSTS or parsed.username or parsed.password or parsed.port not in (None, 443):
+        raise ConnectError(
+            "NQT_BASE_URL may only point at https://nepsequant.com (or this computer, for testing), "
+            "so your key is never sent anywhere else."
+        )
     return url
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow redirects. urllib would otherwise re-send the
+    Authorization header (the key) to wherever a server points it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_KEYED_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def open_keyed(request: urllib.request.Request, timeout: float):
+    """Open a request that carries a key: never follows a redirect."""
+    return _KEYED_OPENER.open(request, timeout=timeout)  # noqa: S310 - callers check the scheme
+
+
+def _redacted(message: str, key: str) -> str:
+    """Never show the key in a message, even if a server echoed it back."""
+    return message.replace(key, "[key removed]") if key else message
 
 
 def credentials_path() -> Path:
@@ -103,15 +138,19 @@ def request_json(
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(base_url() + path, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:  # noqa: S310 - scheme checked in base_url
+        with open_keyed(req, timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             raise ConnectError(f"That key was not accepted. Create a new one at {KEYS_PAGE}") from exc
+        if 300 <= exc.code < 400:
+            raise ConnectError(
+                f"{base_url()} answered with a redirect ({exc.code}); not following it, so your key stays private."
+            ) from exc
         if exc.code == 429:
-            raise ConnectError(_detail(exc) or "Too many requests. Wait a minute and try again.") from exc
+            raise ConnectError(_redacted(_detail(exc), key) or "Too many requests. Wait a minute and try again.") from exc
         if exc.code in (403, 404, 409, 422, 428):
-            raise ConnectError(_detail(exc) or f"NEPSE Quant refused the request ({exc.code}).") from exc
+            raise ConnectError(_redacted(_detail(exc), key) or f"NEPSE Quant refused the request ({exc.code}).") from exc
         raise ConnectError(f"NEPSE Quant answered with an error ({exc.code}). Try again shortly.") from exc
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         raise ConnectError(f"Could not reach {base_url()}. Check your connection and try again.") from exc

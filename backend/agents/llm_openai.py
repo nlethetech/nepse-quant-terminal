@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Optional
 
-from backend.agents.ai_settings import get_api_key, setting
+from backend.agents.ai_settings import get_api_key, setting, redact_keys
 
 DEFAULT_OPENAI_MODEL = "gpt-5-mini"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -143,13 +143,18 @@ def call_openai(
         method="POST",
     )
     wait = float(timeout or TIMEOUTS_S.get(purpose, 60.0))
-    opener = urlopen or urllib.request.urlopen
+    if urlopen is None:
+        from apps.cli.connect import open_keyed  # never follows a redirect with the key
+
+        opener = open_keyed
+    else:
+        opener = urlopen
     started = time.monotonic()
     try:
         with opener(request, timeout=wait) as response:  # noqa: S310 - scheme checked in base_url
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return http_error_message(exc, model=model, who=who)
+        return redact_keys(http_error_message(exc, model=model, who=who))
     except (TimeoutError, socket.timeout):
         return f"ERROR: {who} did not answer within {int(wait)}s. Try again, or ask a shorter question."
     except urllib.error.URLError as exc:

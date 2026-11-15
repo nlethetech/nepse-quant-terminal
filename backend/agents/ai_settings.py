@@ -25,7 +25,9 @@ ENV_KEYS = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
 
 # What a pasted secret looks like: OpenAI (sk-..., sk-proj-...), Anthropic
 # (sk-ant-...) and NEPSE Quant (nqk_...) keys.
-_KEY_PATTERN = re.compile(r"(?<![A-Za-z0-9])(?:sk-(?:ant-|proj-)?[A-Za-z0-9_\-]{16,}|nqk_[A-Za-z0-9_\-]{12,})")
+_KEY_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:sk-(?:ant-|proj-)?[A-Za-z0-9_\-]{16,}|nqk_[A-Za-z0-9_\-]{12,}|nq_live_[A-Za-z0-9_\-]{12,})"
+)
 
 
 def ai_config_path() -> Path:

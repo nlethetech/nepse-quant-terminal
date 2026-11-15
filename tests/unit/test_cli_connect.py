@@ -91,6 +91,6 @@ def test_refusals_carry_the_websites_reason(monkeypatch):
     def refuse(req, timeout):
         raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, io.BytesIO(b'{"detail": "This key can only read."}'))
 
-    monkeypatch.setattr(connect.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(connect, "open_keyed", refuse)
     with pytest.raises(connect.ConnectError, match="This key can only read."):
         connect.request_json("/api/cli/paper/orders", "nqk_abc", method="POST", body={"action": "BUY"})

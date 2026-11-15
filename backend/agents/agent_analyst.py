@@ -500,7 +500,14 @@ def _call_primary_agent(
     history: Optional[list[dict]] = None,
 ) -> str:
     """Send one request to the active backend. ``purpose`` is "analysis" or "chat";
-    ``history`` is [{"role": "user"|"assistant", "content": str}] (oldest first)."""
+    ``history`` is [{"role": "user"|"assistant", "content": str}] (oldest first).
+
+    Safety: anything that looks like an API key (OpenAI, Anthropic, NEPSE
+    Quant) is removed from the prompt, the system text and the history before
+    any provider sees it, whatever the source (chat, news, saved history)."""
+    prompt = redact_keys(prompt)
+    system = redact_keys(system)
+    history = [{**m, "content": redact_keys(str(m.get("content") or ""))} for m in list(history or [])] or None
     backend = _agent_backend()
     cap_key = "gemma4_mlx" if backend in MLX_BACKENDS else backend
     caps = AGENT_TOKEN_CAPS.get(cap_key) or AGENT_TOKEN_CAPS["claude"]
