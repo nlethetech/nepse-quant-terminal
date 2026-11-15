@@ -697,18 +697,18 @@ DataTable {
     background: #060b11;
     color: #d7dde5;
     scrollbar-size: 1 1;
-    scrollbar-background: #101114;
-    scrollbar-color: #24303c;
-    scrollbar-color-hover: #3b4b5d;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
+    scrollbar-color-hover: #5c5c5c;
     scrollbar-color-active: #f2b94b;
 }
 
 VerticalScroll,
 OptionList {
     scrollbar-size: 1 1;
-    scrollbar-background: #101114;
-    scrollbar-color: #24303c;
-    scrollbar-color-hover: #3b4b5d;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
+    scrollbar-color-hover: #5c5c5c;
     scrollbar-color-active: #f2b94b;
 }
 
@@ -1021,8 +1021,8 @@ Button:focus {
     width: 100%;
     background: #07090c;
     scrollbar-size: 1 1;
-    scrollbar-background: #0b0f13;
-    scrollbar-color: #254e53;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
     padding: 0;
     margin: 0;
 }
@@ -1113,8 +1113,8 @@ Button:focus {
     border: none;
     padding: 0;
     scrollbar-size: 1 1;
-    scrollbar-background: #0b0f13;
-    scrollbar-color: #2f3c4a;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
 }
 
 #agent-detail {
@@ -1132,8 +1132,8 @@ Button:focus {
     padding: 0 1;
     border: none;
     scrollbar-size: 1 1;
-    scrollbar-background: #0b0f13;
-    scrollbar-color: #2f3c4a;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
 }
 
 #agent-chat-footer {
