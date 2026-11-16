@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import socket
+import os
 import stat
 import sys
 import urllib.error
@@ -360,8 +361,10 @@ def test_anthropic_missing_package_says_how_to_install(monkeypatch):
 
 def test_key_file_is_owner_only_and_env_wins(monkeypatch):
     path = ai_settings.update_ai_settings(provider="openai", model="gpt-5-mini", key=FAKE_OPENAI_KEY)
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    if os.name != "nt":  # Windows has no POSIX file modes
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":  # Windows has no POSIX file modes
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert ai_settings.get_api_key("openai") == (FAKE_OPENAI_KEY, "file")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env-" + "c" * 20)
     assert ai_settings.get_api_key("openai") == ("sk-from-env-" + "c" * 20, "env")
@@ -382,7 +385,8 @@ def test_connect_ai_setup_status_off(monkeypatch, capsys):
     assert FAKE_ANTHROPIC_KEY not in out and "claude-haiku-5-5" in out
     assert runtime_config.load_active_agent_config()["backend"] == "anthropic"
     path = ai_settings.ai_config_path()
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":  # Windows has no POSIX file modes
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
     monkeypatch.setattr(llm_ollama, "installed_models", lambda *a, **k: (_ for _ in ()).throw(llm_ollama.OllamaUnavailable("down")))
     assert connect.main(["ai", "status"]) == 0

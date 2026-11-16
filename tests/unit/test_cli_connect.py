@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 
 import pytest
@@ -19,7 +20,8 @@ def config_home(tmp_path, monkeypatch):
 
 def test_saved_key_is_private():
     path = connect.save_key("nqk_abc")
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":  # Windows has no POSIX file modes
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert connect.load_key() == "nqk_abc"
 
 

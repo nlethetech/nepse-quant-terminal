@@ -47,6 +47,7 @@ _SECRET_ENV = (
 
 _SANDBOX = Path(tempfile.mkdtemp(prefix="nqt-test-home-"))
 os.environ["HOME"] = str(_SANDBOX)
+os.environ["USERPROFILE"] = str(_SANDBOX)  # Windows: Path.home() reads USERPROFILE, not HOME
 os.environ["XDG_CONFIG_HOME"] = str(_SANDBOX / ".config")
 for _name in _SECRET_ENV:
     os.environ.pop(_name, None)
@@ -119,6 +120,7 @@ def pytest_sessionfinish(session, exitstatus):
 def _isolate_user_config(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     for name in _SECRET_ENV:
         monkeypatch.delenv(name, raising=False)
