@@ -14,8 +14,8 @@ backtest (apps/tui/io/website_strategies.py ``trading_params``):
   the position limit, within the sector cap and the cash available, as market
   orders.
 * **A market filter (gate), when the strategy has one** (the website's
-  research strategies, e.g. AK1 with its K03 filter): while the gate says
-  cash, every position the auto-trader manages is sold ("K03 says cash") and
+  research strategies): while the gate says cash, every position the
+  auto-trader manages is sold ("the filter says cash") and
   nothing is bought; when it turns invested again the next pass buys the
   fresh selection. While invested, the website's selection is a HOLDING LIST:
   a new selection (its ``selection_date`` changes) is the rebalance day —
@@ -210,11 +210,11 @@ def plan(
     # ── a market filter: cash = sell everything we manage, buy nothing ───────
     if gate is not None and not gate.get("invested"):
         since = f" since {gate['since']}" if gate.get("since") else ""
-        sell_all(f"{gate.get('filter') or 'K03'} says cash{since}")
+        sell_all(f"{gate.get('filter') or 'The market filter'} says cash{since}")
         st["last_rebalance"] = None  # re-entry is a fresh selection
         st["last_selection"] = None
         if managed:
-            notes.append(f"{gate.get('filter') or 'K03'} says cash{since}: selling what auto-trade bought, buying nothing.")
+            notes.append(f"{gate.get('filter') or 'The market filter'} says cash{since}: selling what auto-trade bought, buying nothing.")
         return orders, st, notes
 
     selected = {str(p.get("symbol") or "").upper() for p in picks if p.get("symbol")}

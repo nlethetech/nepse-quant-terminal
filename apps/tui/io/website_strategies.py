@@ -3,9 +3,10 @@
 When the terminal is linked to a nepsequant.com account, its strategies come
 from the website: the Lab rule sets, Lab signal blends and saved Screener
 screens the user built (and backtested) there — and, for the desk owner only,
-the website's research strategies (kind ``research``, e.g. AK1). A research
-strategy carries a ``gate`` (the K03 market filter: invested or cash, since
-when, its three gauges); while the gate says cash it holds nothing. The terminal does not build or
+the website's research strategies (kind ``research``). A research strategy
+can carry a ``gate`` (a market filter: invested or cash, since when, and the
+gauges behind it, described by the website); while the gate says cash it holds
+nothing. The terminal does not build or
 edit strategies. It lists them, lets the user assign one, shows that
 strategy's picks for today (computed by the website, the same way it shows
 them), and can auto-trade the assigned strategy on the shared paper book
@@ -102,37 +103,30 @@ def gate_of(strategy: Optional[dict[str, Any]], picks: Optional["Picks"] = None)
 
 
 def gate_title(gate: Optional[dict[str, Any]]) -> str:
-    """``K03: CASH since 2026-04-07`` (empty without a gate)."""
+    """``MARKET FILTER: CASH since 2026-04-07`` (empty without a gate)."""
     if not gate:
         return ""
     pos = "INVESTED" if gate.get("invested") else "CASH"
     since = f" since {gate['since']}" if gate.get("since") else ""
-    return f"{gate.get('filter') or 'K03'}: {pos}{since}"
-
-
-_GAUGE_WORDS = {"rates": "interest rates", "funds": "fund discounts", "trend": "trend"}
+    return f"{gate.get('filter') or 'MARKET FILTER'}: {pos}{since}"
 
 
 def gate_lines(gate: Optional[dict[str, Any]]) -> list[str]:
-    """Plain lines for the detail panel: the position and the three gauges."""
+    """Plain lines for the detail panel: the position and the gauges, worded
+    by the website (``label`` / ``text`` per gauge, ``rule`` for the filter)."""
     if not gate:
         return []
     when = f" (close of {gate['as_of']})" if gate.get("as_of") else ""
+    gauges = gate.get("gauges") or {}
     votes = gate.get("votes")
-    lines = [gate_title(gate) + when + (f" · {votes} of 3 gauges on, 2 needed for 5 sessions in a row"
-                                        if votes is not None else "")]
+    lines = [gate_title(gate) + when
+             + (f" · {votes} of {len(gauges)} gauges on" if votes is not None and gauges else "")
+             + (f" ({gate['rule']})" if gate.get("rule") else "")]
     parts = []
-    for key, g in (gate.get("gauges") or {}).items():
-        label = _GAUGE_WORDS.get(key, key)
-        detail = g.get("detail") or {}
-        extra = ""
-        if key == "rates" and detail.get("rate") is not None and detail.get("mean_12m") is not None:
-            extra = f" {float(detail['rate']):.2f}% vs 12-month mean {float(detail['mean_12m']):.2f}%"
-        elif key == "funds" and g.get("value") is not None:
-            extra = f" {float(g['value']) * 100:+.2f} pts vs usual"
-        elif key == "trend" and g.get("value") is not None:
-            extra = f" {float(g['value']) * 100:+.1f}% vs 50-session mean"
-        parts.append(f"{label} {'ON' if g.get('on') else 'off'}{extra}")
+    for key, g in gauges.items():
+        label = str(g.get("label") or key)
+        text = f" {g['text']}" if g.get("text") else ""
+        parts.append(f"{label} {'ON' if g.get('on') else 'off'}{text}")
     if parts:
         lines.append("Gauges: " + " · ".join(parts))
     if gate.get("invested") and gate.get("selection_date"):

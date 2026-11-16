@@ -1,7 +1,7 @@
 """Auto-trade keeps to the website's order allowance and finishes long lists.
 
 The website takes at most 10 paper orders a minute per account. A research
-strategy like AK1 holds about 40 names, so on its buying day auto-trade sends
+research strategy can hold about 40 names, so on its buying day auto-trade sends
 at most 8 a minute and buys the rest on the next passes; a busy or unreachable
 website (429, 5xx, no connection) is not a refusal, so those orders are tried
 again instead of being given up for the day.
@@ -20,12 +20,12 @@ from apps.tui.io import strategy_autotrader as at
 from apps.tui.io import website_strategies as ws
 
 TODAY = date(2026, 11, 18)  # a Wednesday
-AK1 = {"id": "hs:ak1", "kind": "research", "name": "AK1",
+RS = {"id": "hs:demo", "kind": "research", "name": "Demo research strategy",
        "params": {"max_positions": 40, "rebalance_days": 60, "holding_days": 0, "stop_loss_pct": 0,
                   "trailing_stop_pct": 0, "sector_limit": None},
        "params_source": "research"}
-PARAMS, _ = ws.trading_params(AK1)
-GATE = {"filter": "K03", "invested": True, "since": "2026-11-10", "selection_date": "2026-11-17"}
+PARAMS, _ = ws.trading_params(RS)
+GATE = {"filter": "MF", "invested": True, "since": "2026-11-10", "selection_date": "2026-11-17"}
 NAMES = [f"S{i:02d}" for i in range(1, 41)]
 PICKS = [{"rank": i + 1, "symbol": s, "ltp": 100.0, "sector": "Hydro Power"} for i, s in enumerate(NAMES)]
 
@@ -77,10 +77,10 @@ class Book:
 
 
 class Strategies:
-    assigned = "hs:ak1"
+    assigned = "hs:demo"
 
     def get(self, sid):
-        return {**AK1, "gate": GATE} if sid == "hs:ak1" else None
+        return {**RS, "gate": GATE} if sid == "hs:demo" else None
 
     def picks(self, sid):
         return ws.Picks(strategy_id=sid, as_of="2026-11-17", rows=list(PICKS), gate=GATE)
@@ -88,13 +88,13 @@ class Strategies:
 
 def _trader(tmp_path, clock):
     trader = at.AutoTrader("nqk_one", path=tmp_path / "auto.json", clock=clock)
-    trader.set_enabled(True, "hs:ak1")
+    trader.set_enabled(True, "hs:demo")
     return trader
 
 
 # ── plan(): the allowance cuts the list, and the rest follows ──────────────
 def test_a_cut_list_is_not_marked_done_and_the_next_plan_continues():
-    state = at.fresh_state("hs:ak1")
+    state = at.fresh_state("hs:demo")
     held = []
     for n in range(5):
         positions = [{"symbol": s, "quantity": 250, "avg_cost": 100.0, "last": 100.0} for s in held]
@@ -118,7 +118,7 @@ def test_a_cut_list_is_not_marked_done_and_the_next_plan_continues():
 
 def test_no_allowance_means_no_orders_and_nothing_marked():
     orders, state, _ = at.plan(today=TODAY, params=PARAMS, picks=PICKS, picks_as_of="2026-11-17", positions=[],
-                               cash=1e6, nav=1e6, open_orders=[], state=at.fresh_state("hs:ak1"), gate=GATE,
+                               cash=1e6, nav=1e6, open_orders=[], state=at.fresh_state("hs:demo"), gate=GATE,
                                max_now=0)
     assert orders == [] and state["last_rebalance"] is None and state["last_selection"] is None
 

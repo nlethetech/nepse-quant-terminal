@@ -1,9 +1,9 @@
-"""Auto-trading a gated research strategy (the website's AK1 + K03 filter).
+"""Auto-trading a gated research strategy (a website research strategy with a market filter).
 
 * 0 means OFF for stop-loss / trailing stop / holding days; a null sector cap
   means no cap (a 0% stop used to sell anything at or below its cost).
 * The gate: while it says cash, every position auto-trade bought is sold
-  ("K03 says cash") and nothing is bought; same-day and T+2 guards hold.
+  ("the filter says cash") and nothing is bought; same-day and T+2 guards hold.
 * The selection is a holding list: a new selection date is the rebalance day —
   managed names no longer selected are sold (and retried until they go), new
   names are bought at equal weight of the selection, kept names are left alone.
@@ -17,16 +17,16 @@ from apps.tui.io import strategy_autotrader as at
 from apps.tui.io import website_strategies as ws
 
 TODAY = date(2026, 11, 18)  # a Wednesday
-AK1 = {"id": "hs:ak1", "kind": "research", "name": "AK1 · illiquid stocks + K03 filter",
+RS = {"id": "hs:demo", "kind": "research", "name": "Demo research strategy",
        "params": {"max_positions": 40, "rebalance_days": 60, "holding_days": 0, "stop_loss_pct": 0,
                   "trailing_stop_pct": 0, "sector_limit": None},
        "params_source": "research"}
-PARAMS, _ = ws.trading_params(AK1)
-CASH_GATE = {"filter": "K03", "invested": False, "position": "CASH", "since": "2026-04-07", "as_of": "2026-11-17",
+PARAMS, _ = ws.trading_params(RS)
+CASH_GATE = {"filter": "MF", "invested": False, "position": "CASH", "since": "2026-04-01", "as_of": "2026-11-17",
              "selection_date": None,
-             "gauges": {"rates": {"on": False, "value": 2.75, "detail": {"rate": 2.75, "mean_12m": 2.75}},
-                        "funds": {"on": False, "value": 0.0155, "detail": {}},
-                        "trend": {"on": True, "value": 0.0046, "detail": {}}}, "votes": 1}
+             "gauges": {"g1": {"on": False, "label": "gauge one", "text": "below its usual level"},
+                        "g2": {"on": False, "label": "gauge two"},
+                        "g3": {"on": True, "label": "gauge three", "text": "+0.5%"}}, "votes": 1}
 
 
 def invested(selection_date="2026-11-17"):
@@ -42,12 +42,12 @@ def _pos(sym, qty=100, cost=100.0, last=100.0):
 
 
 def _managed(*syms, bought="2026-11-02"):
-    return {s: {"bought": bought, "hwm": 100.0, "sector": "Hydro Power", "strategy": "hs:ak1"} for s in syms}
+    return {s: {"bought": bought, "hwm": 100.0, "sector": "Hydro Power", "strategy": "hs:demo"} for s in syms}
 
 
 def _plan(**kw):
     args = dict(today=TODAY, params=PARAMS, picks=[], picks_as_of="2026-11-17", positions=[],
-                cash=1_000_000.0, nav=1_000_000.0, open_orders=[], state=at.fresh_state("hs:ak1"), gate=None)
+                cash=1_000_000.0, nav=1_000_000.0, open_orders=[], state=at.fresh_state("hs:demo"), gate=None)
     args.update(kw)
     return at.plan(**args)
 
@@ -56,7 +56,7 @@ def _plan(**kw):
 def test_research_params_turn_the_stops_and_the_holding_limit_off():
     assert PARAMS == {"max_positions": 40, "rebalance_days": 60, "holding_days": 0, "stop_loss_pct": 0.0,
                       "trailing_stop_pct": 0.0, "sector_limit": None}
-    assert ws.trading_params(AK1)[1] == "research"
+    assert ws.trading_params(RS)[1] == "research"
     # keys not sent keep the defaults; a sent cap is a fraction
     params, _ = ws.trading_params({"params": {"max_positions": 6, "sector_limit": 0.25}, "params_source": "strategy"})
     assert params["holding_days"] == 40 and params["stop_loss_pct"] == 8.0 and params["sector_limit"] == 25.0
@@ -80,7 +80,7 @@ def test_no_sector_cap_when_the_strategy_sends_none():
 
 # ── the gate ─────────────────────────────────────────────────────────────────
 def test_cash_sells_everything_auto_trade_bought_and_buys_nothing():
-    state = at.fresh_state("hs:ak1")
+    state = at.fresh_state("hs:demo")
     state.update(last_rebalance="2026-09-01", last_selection="2026-08-31")
     state["managed"] = _managed("A", "B")
     state["managed"]["TODAY"] = {"bought": "2026-11-18", "hwm": 100.0}   # same day: cannot sell yet
@@ -89,9 +89,9 @@ def test_cash_sells_everything_auto_trade_bought_and_buys_nothing():
     orders, st, notes = _plan(positions=positions, state=state, gate=CASH_GATE,
                               picks=[_pick(1, "NEW1"), _pick(2, "NEW2")])
     assert [(o.action, o.symbol, o.qty) for o in orders] == [("SELL", "A", 100), ("SELL", "B", 40)]
-    assert all(o.reason == "K03 says cash since 2026-04-07" for o in orders)
+    assert all(o.reason == "MF says cash since 2026-04-01" for o in orders)
     assert st["last_rebalance"] is None and st["last_selection"] is None  # re-entry = a fresh selection
-    assert any("K03 says cash" in n for n in notes)
+    assert any("MF says cash" in n for n in notes)
     # the next settled day the rest go too
     st["managed"] = {k: v for k, v in st["managed"].items() if k in ("TODAY", "YDAY")}
     later, _, _ = _plan(today=date(2026, 11, 20), positions=[_pos("TODAY"), _pos("YDAY"), _pos("MINE")],
@@ -120,7 +120,7 @@ def test_turning_invested_buys_the_whole_selection_at_equal_weight_of_the_select
 
 
 def test_a_new_selection_rotates_sells_first_and_keeps_names_still_selected():
-    state = at.fresh_state("hs:ak1")
+    state = at.fresh_state("hs:demo")
     state.update(last_rebalance="2026-08-20", last_selection="2026-08-19")
     state["managed"] = _managed("A", "B", "C")
     positions = [_pos("A", qty=1000, last=300.0), _pos("B"), _pos("C"), _pos("MINE")]
@@ -135,7 +135,7 @@ def test_a_new_selection_rotates_sells_first_and_keeps_names_still_selected():
 
 
 def test_a_sell_that_did_not_go_through_is_retried_between_selections():
-    state = at.fresh_state("hs:ak1")
+    state = at.fresh_state("hs:demo")
     state.update(last_rebalance="2026-11-17", last_selection="2026-11-17")
     state["managed"] = _managed("B", "LEFT")
     picks = [_pick(1, "B")]
@@ -144,7 +144,7 @@ def test_a_sell_that_did_not_go_through_is_retried_between_selections():
 
 
 def test_stale_picks_never_rotate_or_buy():
-    state = at.fresh_state("hs:ak1")
+    state = at.fresh_state("hs:demo")
     state["managed"] = _managed("LEFT")
     orders, st, notes = _plan(positions=[_pos("LEFT")], state=state, gate=invested("2026-11-17"),
                               picks=[_pick(1, "B")], picks_as_of="2026-11-06")
@@ -184,13 +184,13 @@ class Book:
 
 
 class Strategies:
-    assigned = "hs:ak1"
+    assigned = "hs:demo"
 
     def __init__(self, gate, rows, error=""):
         self.gate, self.rows, self.error = gate, rows, error
 
     def get(self, sid):
-        return {**AK1, "gate": None} if sid == "hs:ak1" else None
+        return {**RS, "gate": None} if sid == "hs:demo" else None
 
     def picks(self, sid):
         return ws.Picks(strategy_id=sid, as_of="2026-11-17", rows=list(self.rows), gate=self.gate, error=self.error)
@@ -198,12 +198,12 @@ class Strategies:
 
 def test_a_pass_reads_the_gate_from_the_picks(tmp_path):
     trader = at.AutoTrader("nqk_one", path=tmp_path / "auto.json")
-    trader.set_enabled(True, "hs:ak1")
+    trader.set_enabled(True, "hs:demo")
     book = Book()
     trader.run_once(book=book, strategies=Strategies(invested(), [_pick(1, "AAA"), _pick(2, "BBB")]), today=TODAY)
     assert [s[:2] for s in book.sent] == [("BUY", "AAA"), ("BUY", "BBB")]
     assert trader.state["last_selection"] == "2026-11-17"
-    # K03 turns cash: the next settled day everything auto-trade bought is sold
+    # the filter turns cash: the next settled day everything auto-trade bought is sold
     book2 = Book(positions=[_pos("AAA", qty=4950), _pos("BBB", qty=4950)], cash=0.0)
     trader.run_once(book=book2, strategies=Strategies(CASH_GATE, []), today=date(2026, 11, 20))
     assert sorted(s[:2] for s in book2.sent) == [("SELL", "AAA"), ("SELL", "BBB")]
@@ -211,7 +211,7 @@ def test_a_pass_reads_the_gate_from_the_picks(tmp_path):
 
 def test_a_failed_read_of_a_gated_strategy_trades_nothing(tmp_path):
     trader = at.AutoTrader("nqk_one", path=tmp_path / "auto.json")
-    trader.set_enabled(True, "hs:ak1")
+    trader.set_enabled(True, "hs:demo")
     trader.state["managed"] = _managed("AAA")
     trader.save()
     book = Book(positions=[_pos("AAA")])
@@ -221,27 +221,27 @@ def test_a_failed_read_of_a_gated_strategy_trades_nothing(tmp_path):
 
 def test_client_keeps_the_gate_and_the_screens_say_it():
     payload = {"as_of": "2026-11-06", "warming": False, "picks": [], "gate": CASH_GATE, "selection_date": None,
-               "note": "K03 says cash since 2026-04-07; AK1 holds nothing."}
+               "note": "MF says cash since 2026-04-01; the strategy holds nothing."}
 
     def fake(path, key, *, method="GET", body=None, timeout=30):
         if path == "/api/cli/strategies":
-            return {"strategies": [{**AK1, "gate": CASH_GATE, "description": "Research verdict WATCH.",
-                                    "backtest": {"verdict": "WATCH", "cagr_pct": 8.7, "alpha_pct": 11.0,
-                                                 "alpha_t": 1.63, "bar_t": 2.24, "start": "2022-01-02",
-                                                 "end": "2024-06-30", "design": {"alpha_pct": 15.8, "alpha_t": 2.06}}}],
-                    "assigned": "hs:ak1"}
+            return {"strategies": [{**RS, "gate": CASH_GATE, "description": "Research verdict WATCH.",
+                                    "backtest": {"verdict": "WATCH", "cagr_pct": 4.0, "alpha_pct": 5.0,
+                                                 "alpha_t": 1.2, "bar_t": 2.0, "start": "2020-01-01",
+                                                 "end": "2022-12-31", "design": {"alpha_pct": 7.0, "alpha_t": 1.5}}}],
+                    "assigned": "hs:demo"}
         return payload
 
     client = ws.WebsiteStrategies("nqk_x", request=fake)
-    assert client.refresh() and client.assigned == "hs:ak1"
-    picks = client.picks("hs:ak1")
+    assert client.refresh() and client.assigned == "hs:demo"
+    picks = client.picks("hs:demo")
     assert picks.gate["invested"] is False and picks.rows == []
-    assert ws.gate_title(ws.gate_of(client.get("hs:ak1"), picks)) == "K03: CASH since 2026-04-07"
-    lines = ws.describe(client.get("hs:ak1"))
-    assert lines[0] == "AK1 · illiquid stocks + K03 filter  (RESEARCH)"
-    assert any(line.startswith("K03: CASH since 2026-04-07 (close of 2026-11-17) · 1 of 3") for line in lines)
-    assert any("interest rates off 2.75% vs 12-month mean 2.75%" in line and "trend ON" in line for line in lines)
-    assert any(line.startswith("Research verdict WATCH: alpha +11.0%/yr, t 1.63 (bar 2.24)") for line in lines)
+    assert ws.gate_title(ws.gate_of(client.get("hs:demo"), picks)) == "MF: CASH since 2026-04-01"
+    lines = ws.describe(client.get("hs:demo"))
+    assert lines[0] == "Demo research strategy  (RESEARCH)"
+    assert any(line.startswith("MF: CASH since 2026-04-01 (close of 2026-11-17) · 1 of 3 gauges on") for line in lines)
+    assert any("gauge one off below its usual level" in line and "gauge three ON +0.5%" in line for line in lines)
+    assert any(line.startswith("Research verdict WATCH: alpha +5.0%/yr, t 1.20 (bar 2.00)") for line in lines)
     rules = next(line for line in lines if line.startswith("Trading rules"))
     assert "(from the research)" in rules and "no holding limit" in rules and "no stop-loss" in rules
     assert "no trailing stop" in rules and "no sector cap" in rules and "market filter" in rules
