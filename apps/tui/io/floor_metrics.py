@@ -369,10 +369,16 @@ def signal_records(day: FloorDay) -> list[dict[str, Any]]:
     """The BROKER FLOOR rows, chosen and ordered like the local panel's SQL:
     circular > 0.15 or pump > 0.05 or smart-money > 0.08; circular/pump rows
     first, then circular score and smart-money score, highest first; 60 rows.
-    Ties (SQL leaves them unordered) go by symbol."""
+    Ties (SQL leaves them unordered) go by symbol.
+
+    Like the website's own broker signals, a stock needs at least
+    MIN_SIGNAL_TRADES trades and MIN_SIGNAL_VOLUME shares that day to be listed:
+    on a handful of trades "circular" and "self-trade" readings are noise."""
     rows = [
         r for r in day.symbols
-        if r["circular_score"] > FLAG_CIRCULAR or r["pump_score"] > FLAG_PUMP or r["smart_money_score"] > FLAG_SMART
+        if int(r.get("n_trades") or 0) >= MIN_SIGNAL_TRADES
+        and int(r.get("total_volume") or r.get("total_qty") or 0) >= MIN_SIGNAL_VOLUME
+        and (r["circular_score"] > FLAG_CIRCULAR or r["pump_score"] > FLAG_PUMP or r["smart_money_score"] > FLAG_SMART)
     ]
     rows.sort(key=lambda r: (0 if _flagged(r) else 1, -r["circular_score"], -r["smart_money_score"], r["symbol"]))
     # No microstructure score comes with a floorsheet (the local table is empty

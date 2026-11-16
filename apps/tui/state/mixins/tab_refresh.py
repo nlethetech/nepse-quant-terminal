@@ -2125,7 +2125,7 @@ class TabRefreshMixin:
             broker_title = payload.get("broker_title") or ""
             date_part = broker_title.split("|")[0].replace("BROKER FLOOR", "").strip() if "|" in broker_title else ""
             self.query_one("#broker-top-title", Static).update(
-                f"TOP BROKERS BY VOLUME{('  ' + date_part) if date_part else ''}"
+                f"TOP BROKERS BY NET QTY{('  ' + date_part) if date_part else ''}"
             )
         except Exception:
             pass

@@ -23,8 +23,9 @@ DAY = "2026-11-13"
 
 
 def payload(version: str = f"{DAY}:6:stamp", day: str = DAY, complete=True) -> dict:
-    # broker 5 and 6 trade back and forth (circular); broker 7 trades with itself
-    trades = [(0, 5, 6, 300), (0, 6, 5, 300), (0, 5, 6, 200), (0, 6, 5, 200), (1, 7, 7, 900), (1, 1, 7, 100)]
+    # broker 5 and 6 trade back and forth (circular); broker 7 trades with itself.
+    # Enough trades and shares (>= 20 and >= 5,000) that the panel lists them.
+    trades = [(0, 5, 6, 300), (0, 6, 5, 300)] * 12 + [(1, 7, 7, 300)] * 22 + [(1, 1, 7, 100)] * 2
     return {
         "date": day, "version": version, "available_dates": [day], "complete": complete, "notice": "n",
         "symbols": ["CIRC", "SELF"], "brokers": [{"id": c, "name": None} for c in (1, 5, 6, 7)],
@@ -222,7 +223,7 @@ def test_a_linked_terminal_fills_both_panels_from_the_website(monkeypatch):
     app._signals_workspace_cache_payload = {"broker_cols": [], "broker_rows": [], "broker_title": "BROKER FLOOR  —  loading"}
     dashboard_tui.NepseDashboard._apply_website_floor(app)
     assert widgets["#broker-floor-title"].text.startswith(f"BROKER FLOOR  {DAY}  |")
-    assert widgets["#broker-top-title"].text == f"TOP BROKERS BY VOLUME  {DAY}"
+    assert widgets["#broker-top-title"].text == f"TOP BROKERS BY NET QTY  {DAY}"
     assert {r[0] for r in widgets["#dt-broker-floor"].rows} == {"CIRC", "SELF"}
     assert len(widgets["#dt-broker-top"].rows) == 4
     assert widgets["#dt-broker-floor"].columns[0] == "SYMBOL"

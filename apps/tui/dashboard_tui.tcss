@@ -1702,3 +1702,9 @@ ModalDialog {
     scrollbar-color-active: #f2b94b;
     scrollbar-corner-color: #0a0a0a;
 }
+
+/* The broker panel title must not take the whole header, or the
+   ALL / CIRCULAR / PUMP / SMART filter buttons beside it are pushed off. */
+#broker-floor-title {
+    width: 1fr;
+}

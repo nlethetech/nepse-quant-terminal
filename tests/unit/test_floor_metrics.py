@@ -109,7 +109,11 @@ def assert_matches_scraper(day, tmp_path):
                      -r["circular_score"], -r["smart_money_score"], r["symbol"])
     cols = ("symbol", "hhi_buy", "hhi_sell", "circular_score", "pump_score", "self_trade_pct",
             "smart_money_score", "n_trades", "micro_score")
-    local = sorted((dict(r) for r in rows), key=key)
+    # like the website, the linked panel leaves out thin stocks (< 20 trades or
+    # < 5,000 shares); the local SQL path lists them, so filter the same way here
+    eligible = lambda r: (mine[r["symbol"]]["n_trades"] >= fm.MIN_SIGNAL_TRADES  # noqa: E731
+                          and mine[r["symbol"]]["total_volume"] >= fm.MIN_SIGNAL_VOLUME)
+    local = sorted((dict(r) for r in rows if eligible(r)), key=key)
     if len(local) < fm.SIGNAL_ROWS:
         assert [tuple(r[c] for c in cols) for r in fm.signal_records(got)] == [tuple(r[c] for c in cols) for r in local]
     tkey = lambda r: (-abs(r["net_qty"]), -r["total_trades"], r["broker_code"])  # noqa: E731
@@ -142,6 +146,8 @@ def test_smart_money_and_thin_stocks(tmp_path):
     # is still computed and can flag a thin stock (the scraper does the same)
     assert rows["P3"]["smart_money_score"] == 0.0 and rows["P3"]["pump_score"] == 0.0
     assert rows["P3"]["circular_score"] > 0.15
+    # ...but the panel no longer lists it (the website's rule): a few trades are noise
+    assert "P3" not in {r["symbol"] for r in fm.signal_records(got)}
 
 
 # ── Rust == Python, to the bit ───────────────────────────────────────────────
@@ -248,10 +254,10 @@ def test_a_website_reply_becomes_a_day():
 def test_signal_rows_are_capped_and_ordered():
     rows = [
         {"symbol": f"X{i:02d}", "circular_score": 0.2 + i / 1000, "pump_score": 0.0, "smart_money_score": 0.0,
-         "self_trade_pct": 0.0, "hhi_buy": 0, "hhi_sell": 0, "n_trades": 1}
+         "self_trade_pct": 0.0, "hhi_buy": 0, "hhi_sell": 0, "n_trades": 25, "total_volume": 10_000}
         for i in range(70)
     ] + [{"symbol": "SM", "circular_score": 0.0, "pump_score": 0.0, "smart_money_score": 0.5,
-          "self_trade_pct": 0.0, "hhi_buy": 0, "hhi_sell": 0, "n_trades": 1}]
+          "self_trade_pct": 0.0, "hhi_buy": 0, "hhi_sell": 0, "n_trades": 25, "total_volume": 10_000}]
     day = fm.FloorDay(date=DAY, engine="python", symbols=rows)
     picked = fm.signal_records(day)
     assert len(picked) == 60 and picked[0]["symbol"] == "X69"
