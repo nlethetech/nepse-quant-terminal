@@ -1,0 +1,27 @@
+[package]
+name = "nqt_floor"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Optional native speed-up for the NEPSE Quant Terminal's broker floor panels."
+publish = false
+
+[lib]
+name = "nqt_floor"
+# cdylib = the Python extension; rlib lets `cargo test` link the plain Rust code.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# One abi3 wheel works on every Python from 3.9 up.
+pyo3 = { version = "0.30", optional = true, features = ["abi3-py39"] }
+
+[features]
+default = []
+python = ["dep:pyo3"]
+# maturin turns this on (pyproject.toml); `cargo test` builds without Python.
+extension-module = ["python", "pyo3/extension-module"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
