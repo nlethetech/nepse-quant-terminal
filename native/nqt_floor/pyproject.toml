@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "nqt-floor"
+version = "0.1.0"
+description = "Optional native speed-up for the NEPSE Quant Terminal's broker floor panels."
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+[tool.maturin]
+features = ["extension-module"]
+module-name = "nqt_floor"

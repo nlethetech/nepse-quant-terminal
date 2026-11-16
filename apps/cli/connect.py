@@ -28,6 +28,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ KEYS_PAGE = f"{SITE}/desk/settings"
 KEY_PREFIX = "nqk_"
 USER_AGENT = "nepse-quant-terminal/connect"
 TIMEOUT_S = 30
+MAX_BODY_BYTES = 256 * 1024 * 1024  # a gzip reply is never unpacked past this
 
 
 class ConnectError(Exception):
@@ -123,6 +125,17 @@ def _detail(exc: urllib.error.HTTPError) -> str:
     return detail.strip() if isinstance(detail, str) else ""
 
 
+def _gunzip(raw: bytes) -> bytes:
+    unpack = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        out = unpack.decompress(raw, MAX_BODY_BYTES)
+    except zlib.error as exc:
+        raise ValueError(f"damaged gzip reply: {exc}") from exc
+    if unpack.unconsumed_tail:
+        raise ValueError("reply too large")
+    return out
+
+
 def request_json(
     path: str,
     key: str,
@@ -130,8 +143,12 @@ def request_json(
     method: str = "GET",
     body: dict[str, Any] | None = None,
     timeout: float = TIMEOUT_S,
+    compressed: bool = False,
 ) -> dict[str, Any]:
+    """``compressed=True`` asks for a gzip reply (large market data) and unpacks it."""
     headers = {"Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": USER_AGENT}
+    if compressed:
+        headers["Accept-Encoding"] = "gzip"
     data = None
     if body is not None:
         data = json.dumps(body).encode("utf-8")
@@ -139,7 +156,11 @@ def request_json(
     req = urllib.request.Request(base_url() + path, data=data, headers=headers, method=method)
     try:
         with open_keyed(req, timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            raw = response.read()
+            encoding = str(getattr(response, "headers", {}).get("Content-Encoding", "") or "").strip().lower()
+            if compressed and encoding == "gzip":
+                raw = _gunzip(raw)
+            return json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             raise ConnectError(f"That key was not accepted. Create a new one at {KEYS_PAGE}") from exc

@@ -415,6 +415,8 @@ class NepseDashboard(
     # and the auto-trader for the assigned one (apps/tui/io/strategy_autotrader.py).
     _website_strategies = None
     _autotrader = None
+    # Linked: the broker panels' floorsheet from nepsequant.com (apps/tui/io/website_floor.py).
+    _website_floor = None
     _webstrat_index: int = 0
     _account_engines: dict = {}  # account_id -> TUITradingEngine
     _news_search_query: str = ""  # current news search filter
