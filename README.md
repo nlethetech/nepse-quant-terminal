@@ -2,7 +2,7 @@
 
 [![Python CI](https://github.com/nlethetech/nepse-quant-terminal/actions/workflows/python-ci.yml/badge.svg)](https://github.com/nlethetech/nepse-quant-terminal/actions/workflows/python-ci.yml)
 ![Python 3.10–3.13](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)
-![License: MIT](https://img.shields.io/badge/license-MIT-green)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 A keyboard-driven research and paper-trading terminal for the Nepal Stock Exchange (NEPSE). It runs in your terminal on macOS, Windows and Linux, works on its own, and connects to a free [nepsequant.com](https://nepsequant.com) account for one shared paper book, the website's market data, your own strategies and an AI analyst.
 
@@ -381,10 +381,18 @@ Read the deflated Sharpe ratio, the random-baseline percentile and the benchmark
 
 ## Contributing
 
-Bug reports and pull requests are welcome. Please run `python -m pytest tests/` before opening a pull request, and include evidence for any change to how figures are calculated. Thanks to everyone who has contributed, including Saurab Shrestha for the EPS annualization fix (#32).
+Bug reports and pull requests are welcome. Please run `python -m pytest tests/` before opening a pull request, and include evidence for any change to how figures are calculated. By contributing, you agree that your contribution is licensed under the AGPL-3.0 (see [License](#license)).
+
+Thanks to everyone who has contributed, including Saurab Shrestha for the EPS annualization fix (#32) and Prabesh Aryal for the Windows compatibility fixes.
 
 ---
 
 ## License
 
-MIT
+Copyright (C) 2026 nlethetech and contributors.
+
+NEPSE Quant Terminal is free software, licensed under the **GNU Affero General Public License v3.0** (see [LICENSE](LICENSE)). You may use, study, change and share it. If you distribute a modified version, or run one for other people over a network, you must make its complete source code available under the same licence.
+
+Earlier versions of this repository were published under the MIT License. Copies obtained under those terms, and contributions made under them, remain available under MIT.
+
+The nepsequant.com website, its data and its services are separate from this repository and are not covered by this licence.
