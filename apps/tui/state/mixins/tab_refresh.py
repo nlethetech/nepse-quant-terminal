@@ -54,6 +54,16 @@ from apps.tui.render.cells import (
     _truncate_text,
     _vol_text,
 )
+from apps.tui.io.floor_metrics import local_floor_records
+from apps.tui.render.broker_floor import (
+    BROKER_COLS,
+    TOP_BROKER_COLS,
+    floor_signal_rows,
+    floor_title,
+    message_row,
+    top_broker_rows as top_broker_rows_for,
+    website_floor_panels,
+)
 from apps.tui.render.text_blocks import (
     _headline_fallback_from_url,
     _render_lookup_intelligence,
@@ -1776,6 +1786,7 @@ class TabRefreshMixin:
         if not s["winners"] and not s["losers"]:
             dt2.add_row(_dim_text("—"), _dim_text("No positions"), *[Text("")] * 3)
     def _populate_signals_workspace(self, force: bool = False) -> None:
+        self._maybe_refresh_website_floor()
         cache_key = self._data_version()
         if (
             not force
@@ -2012,131 +2023,37 @@ class TabRefreshMixin:
                     conn.close()
 
             # ── Broker floor signals ─────────────────────────────────────────
-            # (label, key, width) — explicit widths for perfect alignment
-            broker_cols = [
-                ("SYMBOL",   "bsym",    8),
-                ("SIGNAL",   "btype",  14),
-                ("BUY HHI",  "bhhi_b",  8),
-                ("SLR HHI",  "bhhi_s",  8),
-                ("CIRC",     "bcirc",   6),
-                ("SELF%",    "bself",   6),
-                ("SM SCORE", "bscore",  9),
-                ("TRADES",   "btr",     7),
-            ]
+            broker_cols = BROKER_COLS
             broker_rows: list[list[Text]] = []
             top_broker_cols: list = []
             top_broker_rows: list[list[Text]] = []
-            broker_title = "BROKER FLOOR SIGNALS — python3 -m backend.quant_pro.data_scrapers.floorsheet_ingestion"
-            try:
-                import sqlite3 as _sqlite3
-                from backend.quant_pro.database import get_db_path as _get_db_path
-                _bconn = _sqlite3.connect(str(_get_db_path()))
-                _bconn.row_factory = _sqlite3.Row
-                # Check if broker_signals_v2 table has any data
+            website_floor = getattr(self, "_website_floor", None)
+            if website_floor is not None:
+                # Linked: computed from nepsequant.com's floorsheet (no network here;
+                # _refresh_website_floor downloads it in its own worker).
+                broker_title, broker_rows, top_broker_cols, top_broker_rows = website_floor_panels(
+                    website_floor.view, website_floor.error
+                )
+            else:
+                broker_title = "BROKER FLOOR SIGNALS — python3 -m backend.quant_pro.data_scrapers.floorsheet_ingestion"
                 try:
-                    _latest_bdate = (_bconn.execute(
-                        "SELECT MAX(as_of_date) FROM broker_signals_v2"
-                    ).fetchone() or [None])[0]
-                except Exception:
-                    _latest_bdate = None
-                if _latest_bdate:
-                    _brows = _bconn.execute("""
-                        SELECT b.symbol,
-                               b.hhi_buy, b.hhi_sell,
-                               b.circular_score, b.pump_score,
-                               COALESCE(b.self_trade_pct, b.pump_score) AS self_trade_pct,
-                               b.smart_money_score, b.n_trades,
-                               m.micro_score
-                        FROM broker_signals_v2 b
-                        LEFT JOIN broker_microstructure m
-                          ON b.symbol = m.symbol AND m.as_of_date = b.as_of_date
-                        WHERE b.as_of_date = ?
-                          AND (b.circular_score > 0.15 OR b.pump_score > 0.05 OR b.smart_money_score > 0.08)
-                        ORDER BY
-                            CASE WHEN b.circular_score > 0.15 OR b.pump_score > 0.05 THEN 0 ELSE 1 END ASC,
-                            b.circular_score DESC,
-                            b.smart_money_score DESC
-                        LIMIT 60
-                    """, (_latest_bdate,)).fetchall()
-                    n_circ = sum(1 for _r in _brows if float(_r["circular_score"] or 0) > 0.15)
-                    n_sm   = sum(1 for _r in _brows if float(_r["smart_money_score"] or 0) > 0.08)
-                    broker_title = (
-                        f"BROKER FLOOR  {_latest_bdate}  |"
-                        f"  {n_circ} circular/pump  ·  {n_sm} smart money  ·  {len(_brows)} total"
-                    )
-                    for _r in _brows:
-                        circ  = float(_r["circular_score"]  or 0.0)
-                        self_ = float(_r["self_trade_pct"]  or 0.0)  # self-trade fraction
-                        pump  = float(_r["pump_score"]       or 0.0)  # composite pump score
-                        sm    = float(_r["smart_money_score"] or 0.0)
-                        hhi_b = float(_r["hhi_buy"]          or 0.0)
-                        hhi_s = float(_r["hhi_sell"]         or 0.0)
-                        trades = int(_r["n_trades"]          or 0)
-                        # Microstructure-adjusted score
-                        _ms = _r["micro_score"]
-                        micro = float(_ms) if _ms is not None else 0.5
-                        display_score = sm * (0.5 + 0.5 * micro)
-                        # Signal classification — self_ is now direct self-trade evidence
-                        if self_ > 0.20 and circ > 0.15:
-                            sig_label, sig_style = "[!] WASH+SELF ", f"bold {LOSS_HI}"
-                        elif self_ > 0.10:
-                            sig_label, sig_style = "[!] SELF-TRADE", LOSS_HI
-                        elif circ > 0.15:
-                            sig_label, sig_style = "[!] CIRCULAR  ", LOSS_HI
-                        elif display_score > 0.25:
-                            sig_label, sig_style = "[+] SMART $   ", f"bold {GAIN_HI}"
-                        else:
-                            sig_label, sig_style = "[~] ACCUM     ", GAIN_HI
-                        broker_rows.append([
-                            _sym_text(str(_r["symbol"])),
-                            Text(sig_label, style=sig_style),
-                            Text(f"{hhi_b:5.2f}", style=GAIN_HI if hhi_b > 0.30 else WHITE),
-                            Text(f"{hhi_s:5.2f}", style=LOSS_HI if hhi_s > 0.20 else GAIN_HI),
-                            Text(f"{circ*100:4.0f}%", style=LOSS_HI if circ > 0.15 else WHITE),
-                            Text(f"{self_*100:4.0f}%", style=LOSS_HI if self_ > 0.10 else WHITE),
-                            Text(f"{display_score:7.3f}" if display_score > 0 else "      —",
-                                 style=GAIN_HI if display_score > 0.15 else WHITE),
-                            _dim_text(f"{trades:6d}"),
-                        ])
-                    top_broker_cols = [
-                        ("BROKER", "tbroker", 8),
-                        ("BUY QTY", "tbuy", 10),
-                        ("SELL QTY", "tsell", 10),
-                        ("NET QTY", "tnet", 10),
-                        ("TRADES", "ttrades", 8),
-                    ]
-                    try:
-                        _top_rows = _bconn.execute("""
-                            SELECT broker_code,
-                                   SUM(buy_qty) AS buy_qty,
-                                   SUM(sell_qty) AS sell_qty,
-                                   SUM(net_qty) AS net_qty,
-                                   SUM(total_trades) AS total_trades
-                            FROM broker_summary
-                            WHERE as_of_date = ?
-                            GROUP BY broker_code
-                            ORDER BY ABS(SUM(net_qty)) DESC, SUM(total_trades) DESC
-                            LIMIT 25
-                        """, (_latest_bdate,)).fetchall()
-                    except Exception:
-                        _top_rows = []
-                    for _r in _top_rows:
-                        net_qty = int(_r["net_qty"] or 0)
-                        net_style = GAIN_HI if net_qty > 0 else (LOSS_HI if net_qty < 0 else DIM)
-                        top_broker_rows.append([
-                            Text(str(_r["broker_code"]), style=WHITE),
-                            _vol_text(int(_r["buy_qty"] or 0)),
-                            _vol_text(int(_r["sell_qty"] or 0)),
-                            Text(f"{net_qty:,}", style=net_style),
-                            _dim_text(f"{int(_r['total_trades'] or 0):,}"),
-                        ])
-                else:
-                    broker_rows.append([_dim_text("—"), _dim_text("Run floorsheet ingestion to populate broker data"), *[Text("")] * 6])
-                _bconn.close()
-            except Exception as _be:
-                broker_rows.append([_dim_text("—"), _dim_text("Run floorsheet scraper to populate broker data"), *[Text("")] * 6])
-                top_broker_cols = []
-                top_broker_rows = []
+                    import sqlite3 as _sqlite3
+                    from backend.quant_pro.database import get_db_path as _get_db_path
+                    _bconn = _sqlite3.connect(str(_get_db_path()))
+                    _bconn.row_factory = _sqlite3.Row
+                    _latest_bdate, _brows, _top_rows = local_floor_records(_bconn)
+                    if _latest_bdate:
+                        broker_title = floor_title(_latest_bdate, _brows)
+                        broker_rows = floor_signal_rows(_brows)
+                        top_broker_cols = TOP_BROKER_COLS
+                        top_broker_rows = top_broker_rows_for(_top_rows)
+                    else:
+                        broker_rows.append(message_row("Run floorsheet ingestion to populate broker data"))
+                    _bconn.close()
+                except Exception as _be:
+                    broker_rows.append(message_row("Run floorsheet scraper to populate broker data"))
+                    top_broker_cols = []
+                    top_broker_rows = []
 
             payload = {
                 "calendar_cols": calendar_cols,
@@ -2177,6 +2094,13 @@ class TabRefreshMixin:
         self.query_one("#screener-status-bar", Static).update(Text.from_markup(payload["status_markup"]))
         self.query_one("#screener-list-title", Static).update(payload["list_title"])
 
+        self._render_broker_panels(payload)
+
+    def _render_broker_panels(self, payload: dict) -> None:
+        if getattr(self, "_website_floor", None) is not None:
+            # Linked: always the newest nepsequant.com floorsheet the terminal holds.
+            payload.update(self._website_floor_payload())
+        self._signals_workspace_cache_payload = payload
         try:
             dt_broker = self.query_one("#dt-broker-floor", DataTable)
             dt_broker.clear(columns=True)
@@ -2205,6 +2129,35 @@ class TabRefreshMixin:
             )
         except Exception:
             pass
+    # ── broker panels from nepsequant.com (linked terminals) ────────────────
+    def _website_floor_payload(self) -> dict:
+        floor = self._website_floor
+        title, rows, top_cols, top_rows = website_floor_panels(floor.view, floor.error)
+        return {
+            "broker_cols": BROKER_COLS,
+            "broker_rows": rows,
+            "broker_title": title,
+            "top_broker_cols": top_cols,
+            "top_broker_rows": top_rows,
+        }
+
+    def _maybe_refresh_website_floor(self) -> None:
+        floor = getattr(self, "_website_floor", None)
+        if floor is not None and floor.due():
+            self._refresh_website_floor()
+
+    @work(thread=True, group="website-floor")
+    def _refresh_website_floor(self, force: bool = False) -> None:
+        """Download + compute in this worker; the UI thread only re-renders."""
+        floor = getattr(self, "_website_floor", None)
+        if floor is not None and floor.refresh(force=force):
+            self.call_from_thread(self._apply_website_floor)
+
+    def _apply_website_floor(self) -> None:
+        payload = getattr(self, "_signals_workspace_cache_payload", None)
+        if payload is not None:  # else the workspace render picks it up
+            self._render_broker_panels(payload)
+
     def _apply_broker_floor_filter(self) -> None:
         """Re-populate broker floor table from cached payload using current filter."""
         payload = getattr(self, "_signals_workspace_cache_payload", None) or {}

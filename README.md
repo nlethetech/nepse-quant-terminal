@@ -32,6 +32,7 @@ Then start the terminal as usual. While connected:
 - **Portfolio, Orders and Trades show your nepsequant.com paper book**, refreshed every 30 seconds.
 - **Orders you place go to the website's paper simulator**: leave the price empty for a market order, type a price for a limit order. The website applies its rules (NEPSE hours, Rs 0.10 ticks, price band, T+2, fees and capital gains tax), so a fill here is the same fill you see on the website.
 - **Automatic trading is off**: the auto-trading engine and agent auto-orders only run on a local book.
+- **The broker panels on the Signals tab (BROKER FLOOR and TOP BROKERS) use nepsequant.com's floorsheet**: the terminal downloads the latest day's trades (about 0.3 MB, at most every five minutes) and computes the panels itself, so you don't need to run the local floorsheet scraper. The panel title shows the day and which engine computed it (`rust` or `python`). These panels describe where trades were placed; a broker acts for many clients, so they are analytics, not trade signals.
 - **Virtual money only.** Nothing here can reach a broker.
 
 The key is stored on your computer with owner-only permissions, is only sent to nepsequant.com over HTTPS, and can be revoked on the website at any time. To keep the local paper book while a key is saved, start with `NQT_SHARED_BOOK=0`.
@@ -320,6 +321,16 @@ python scripts/ingestion/deterministic_daily_ingestion.py
 ```
 
 > The signal engine (volume breakout, momentum, quarterly fundamental, etc.) relies on recent price history. Stale data = stale signals. Set up a daily cron job or run the ingestion script manually each evening.
+
+### Optional: native speed-up for the broker panels
+
+The broker panels are computed in plain Python (numpy) by default. An optional Rust module computes the same numbers about five times faster; everything works without it. To build it you need [Rust](https://rustup.rs):
+
+```bash
+pip install maturin && maturin develop --release -m native/nqt_floor/Cargo.toml
+```
+
+It installs into the Python environment you run the terminal with. Set `NQT_FLOOR_ENGINE=python` to ignore it.
 
 ### Run
 

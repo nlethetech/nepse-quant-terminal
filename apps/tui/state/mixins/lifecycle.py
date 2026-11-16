@@ -104,6 +104,9 @@ class LifecycleMixin:
         # book is the terminal's paper book; it is fetched in the background.
         from apps.tui.io.website_book import WebsiteBook
         self._website_book = WebsiteBook.from_saved() if self.trade_mode == "paper" else None
+        # Linked: the broker panels come from nepsequant.com's floorsheet too.
+        from apps.tui.io.website_floor import WebsiteFloor
+        self._website_floor = WebsiteFloor.from_book(self._website_book)
         self._init_website_strategies()
         self._build_ticker()
         self._update_header()
