@@ -1,172 +1,307 @@
 # NEPSE Quant Terminal
 
-A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NEPSE), built with [Textual](https://textual.textualize.io/). Runs entirely in your terminal — no browser, no electron, no cloud dependency.
+[![Python CI](https://github.com/nlethetech/nepse-quant-terminal/actions/workflows/python-ci.yml/badge.svg)](https://github.com/nlethetech/nepse-quant-terminal/actions/workflows/python-ci.yml)
+![Python 3.10–3.13](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
-**Paper trading only.** This terminal places no real orders. On its own it keeps a local paper book; [connected to your NEPSE Quant account](#connect-to-nepse-quant) it uses your nepsequant.com paper portfolio instead, so the terminal and the website share one paper book.
-
-**Prefer no setup?** The full web terminal is free at **[nepsequant.com](https://nepsequant.com)**: markets, broker flow, floorsheet, paper trading, risk and backtests.
-
-> **Status:** this terminal is still being improved. We are fixing a few known bugs and working toward full parity with [nepsequant.com](https://nepsequant.com), so some website features are not here yet. For the most complete version today, use the website.
-
-> ⚠️ **Disclaimer — read this first.** This is an **educational research tool, not financial advice.** It does not connect to a broker and cannot place real orders. The bundled backtest figures are **in-sample / historical** — they come from a parameter sweep, are **not** corrected for the number of strategy variants tried, and the repo ships **no artifact that reproduces them as forward-tested returns.** Treat them as a demonstration of the tooling, not as proof of an edge. Past performance does not indicate future results. Nothing here is a recommendation to buy or sell any security. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md).
-
----
-
-## Connect to NEPSE Quant
+A keyboard-driven research and paper-trading terminal for the Nepal Stock Exchange (NEPSE). It runs in your terminal on macOS, Windows and Linux, works on its own, and connects to a free [nepsequant.com](https://nepsequant.com) account for one shared paper book, the website's market data, your own strategies and an AI analyst.
 
 [![Watch the demo: connect the NEPSE Quant Terminal to nepsequant.com](docs/media/nepse-quant-terminal-demo.png)](docs/media/nepse-quant-terminal-demo.mp4)
 
-[▶ Watch the demo](docs/media/nepse-quant-terminal-demo.mp4) (one continuous take): create a key on nepsequant.com, connect the terminal, add an AI analyst, then Portfolio, Lookup, Orders, Signals, Strategies and Agents. *Recorded on a demo account: virtual money, back-dated example trades, not a track record.*
+[▶ Watch the 3-minute demo](docs/media/nepse-quant-terminal-demo.mp4), one continuous take: create a key on nepsequant.com, connect the terminal, add an AI analyst, then Portfolio, Lookup, Orders, Signals, Strategies and Agents. *Recorded on a demo account: virtual money and back-dated example trades, not a track record.*
 
-Use your [nepsequant.com](https://nepsequant.com) paper portfolio as the terminal's paper book: one book on the website, your phone and this terminal.
+> **Paper trading only.** The terminal cannot connect to a broker or place real orders; every trade uses virtual money. It is a research and education tool, not financial advice. Please read the [disclaimer and limitations](#disclaimer-and-limitations).
 
-1. Sign in at [nepsequant.com](https://nepsequant.com) (free) and open **Settings → AI agents**. Type a name, tick **Paper trading** so the terminal can place paper orders, and press **Create key**. The key is shown once: copy it. (A key without Paper trading shows your book read-only.)
-2. From the repository folder:
+---
+
+## Contents
+
+- [Quick start](#quick-start)
+- [Connect to nepsequant.com](#connect-to-nepsequantcom)
+- [What's inside](#whats-inside)
+- [AI analyst](#ai-analyst)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Market data](#market-data)
+- [Security and privacy](#security-and-privacy)
+- [For developers](#for-developers)
+- [Disclaimer and limitations](#disclaimer-and-limitations)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Quick start
+
+### The easy way (no command line)
+
+1. Download the repository: **Code → Download ZIP**, then unzip it (or `git clone` it).
+2. Double-click the launcher for your computer:
+
+   | System | Launcher |
+   |---|---|
+   | macOS | `Nepse Quant Terminal.app` (or `Launch Quant Terminal.command`) |
+   | Windows | `Launch Quant Terminal.bat` |
+
+The launcher creates a Python environment, installs what the terminal needs, downloads the market database (about 13 MB) and starts the terminal. The first start takes a few minutes; later starts are quick. If macOS blocks the launcher or something goes wrong, see [docs/EASY_LAUNCH.md](docs/EASY_LAUNCH.md).
+
+### Manual install
+
+Requires **Python 3.10–3.13** (3.12 recommended; 3.14 is not supported yet).
+
+macOS and Linux:
 
 ```bash
-./nqt-connect login     # paste the key; it stays hidden
-./nqt-connect status    # which account, and whether the key can trade
-./nqt-connect paper     # your paper portfolio, as text
-./nqt-connect real      # your real portfolio (read-only)
-./nqt-connect logout    # back to the terminal's own local paper book
+git clone https://github.com/nlethetech/nepse-quant-terminal
+cd nepse-quant-terminal
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python setup_data.py                 # downloads the market database (~13 MB)
+python -m apps.tui.dashboard_tui     # start the terminal
 ```
 
-3. Optional: add an AI analyst with `./nqt-connect ai setup` (Ollama on your computer, or your own OpenAI or Claude key; see [AI Agent Setup](#ai-agent-setup)).
-4. Start the terminal: `python -m apps.tui.dashboard_tui`. While connected:
+Windows (PowerShell):
 
-- **Portfolio, Orders and Trades show your nepsequant.com paper book**, refreshed every 30 seconds.
-- **Orders you place go to the website's paper simulator**: leave the price empty for a market order, type a price for a limit order. The website applies its rules (NEPSE hours, Rs 0.10 ticks, price band, T+2, fees and capital gains tax), so a fill here is the same fill you see on the website.
-- **Lookup (key 4, or L) shows nepsequant.com's page for a stock**: a volume chart (green up days, red down days), a year of daily prices, key facts (market cap, P/E, P/B, ROE, yield, 52-week range), related stocks in the same sector (press Enter on one to open it), quarterly results, dividends and bonus, news and exchange filings, and the brokers who bought and sold most over the last 20 sessions. For `NEPSE` it shows the index and the day's movers.
-- **Strategies (key 0) are the ones you built on nepsequant.com**: Lab rule sets, signal blends and saved Screener screens. Assign one to see its picks on the Signals tab; **AUTO** lets the terminal trade it on your paper book while the terminal is open and NEPSE is trading (at most 8 orders a minute; it only sells what it bought). The local auto-trading engine and the agent's own auto-orders stay off while linked.
-- **The broker panels on the Signals tab (BROKER FLOOR and TOP BROKERS) use nepsequant.com's floorsheet**: the terminal downloads the latest day's trades (about 0.3 MB, at most every five minutes) and computes the panels itself, so you don't need to run the local floorsheet scraper. The panel title shows the day and which engine computed it (`rust` or `python`). These panels describe where trades were placed; a broker acts for many clients, so they are analytics, not trade signals.
-- **Virtual money only.** Nothing here can reach a broker.
-
-The key is stored on your computer with owner-only permissions, is only sent to nepsequant.com over HTTPS, and can be revoked on the website at any time. To keep the local paper book while a key is saved, start with `NQT_SHARED_BOOK=0`.
+```powershell
+git clone https://github.com/nlethetech/nepse-quant-terminal
+cd nepse-quant-terminal
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -r requirements.txt
+python -m scripts.ops.windows_preflight
+python setup_data.py
+python -m apps.tui.dashboard_tui
+```
 
 ---
 
-## What It Does
+## Connect to nepsequant.com
 
-- **Paper Trading** — full paper portfolio with buy/sell order book, P&L tracking, NAV history, and multi-account support. Seed from your MeroShare holdings CSV or start blank.
-- **Auto Trading Engine** — assigns a quantitative strategy to each account. The engine runs in the background, generates signals every 5 trading days, and manages entries/exits automatically (holding periods, stop losses, trailing stops, regime filters).
-- **Backtesting** — backtests on 6+ years of NEPSE price data, with a walk-forward replay harness and a statistical validation suite. The bundled C5 baseline shows a *historical, in-sample* +88% return (Sharpe ~2.2) vs. NEPSE +27% — a figure from a parameter sweep, **not corrected for multiple testing and not a forward-performance claim** (the repo ships no artifact reproducing it). Run the validation suite (deflated Sharpe, random-baseline percentile, CSCV/PBO) to see how it holds up; see [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md).
-- **Market Dashboard** — live quotes, 52-week highs/lows, top movers, sector heatmap, volume signals.
-- **Portfolio Analytics** — unrealized/realized P&L, sector concentration, holding age buckets, max drawdown, alpha vs. NEPSE benchmark.
-- **Gold Hedge Overlay** — tracks gold/silver regime (risk-on / neutral / risk-off) and adjusts capital deployment accordingly.
-- **AI Agent** — on-demand analysis of your portfolio positions and signal shortlist. Defaults to a local Ollama model; OpenAI or Claude on your own API key, Gemma 4 MLX or the Claude CLI are optional backends. When the terminal is linked to nepsequant.com it also reads NEPSE Quant's market briefing and news.
-- **Paper Agent Graph** — cleaned evidence-gated research, debate, risk, and portfolio decision workflow for paper execution only.
-- **Strategy Builder** — create, backtest, and assign custom strategies. Each account runs its own strategy independently.
-- **Statistical Validation** — walk-forward replay across rolling subwindows, Monte Carlo, CSCV/PBO overfitting detection, deflated Sharpe ratio, random baseline percentile. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md) for what each test does and does not prove.
-- **MeroShare Import** — seed any account directly from your MeroShare "My Shares Values.csv" export.
+Connecting is optional. On its own, the terminal keeps a local paper book and uses its local market database. Connected, it uses your [nepsequant.com](https://nepsequant.com) paper portfolio, so the website, your phone and the terminal all show the same book.
+
+1. Sign in at [nepsequant.com](https://nepsequant.com) (free) and open **Settings → AI agents**.
+2. Type a name for the key, tick **Paper trading** so the terminal can place paper orders, and press **Create key**. The key is shown once: copy it. (A key without Paper trading shows your book read-only.)
+3. In the terminal's folder, save the key:
+
+   ```bash
+   ./nqt-connect login     # paste the key; it stays hidden
+   ./nqt-connect status    # shows the account and whether the key can trade
+   ```
+
+4. Start the terminal: `python -m apps.tui.dashboard_tui` (or use the launcher).
+
+| Command | What it does |
+|---|---|
+| `./nqt-connect login` | Save a key from nepsequant.com |
+| `./nqt-connect status` | Show the linked account and the key's access |
+| `./nqt-connect paper` | Print your paper portfolio |
+| `./nqt-connect real` | Print your real portfolio (read-only) |
+| `./nqt-connect logout` | Remove the key and return to the local paper book |
+
+**While connected:**
+
+| Area | What changes |
+|---|---|
+| Portfolio, Orders, Trades | Show your nepsequant.com paper book, refreshed every 30 seconds. |
+| Placing orders | Orders go to the website's paper simulator. Leave the price empty for a market order, or type one for a limit order. The website applies NEPSE's rules (trading hours, Rs 0.10 ticks, price band, T+2 settlement, fees and capital gains tax), so a fill in the terminal is the same fill you see on the website. |
+| Lookup | Shows nepsequant.com's page for a stock (see [What's inside](#whats-inside)). |
+| Strategies | Lists the strategies you built on nepsequant.com: Lab rule sets, signal blends and saved Screener screens. Assign one to see its picks; **AUTO** trades it on your paper book while the terminal is open and NEPSE is trading. Auto-trade sends at most 8 orders a minute and only sells what it bought. |
+| Broker panels | The Signals tab's broker panels are computed on your computer from the website's floorsheet, so no local scraper is needed. |
+| AI analyst | Reads the website's market briefing and can look up prices, history, company news and filings while it answers. |
+
+To keep the local paper book while a key is saved, start the terminal with `NQT_SHARED_BOOK=0`.
 
 ---
 
-## Architecture
+## What's inside
 
-### Paper Agent Workflow
-
-The public agent workflow is evidence-gated, checkpointed, and restricted to paper execution. The implementation in `backend/nepse_agents/` does not include live order routing, credentials, or execution integrations.
-
-![NEPSE Quant Terminal paper agent architecture](docs/assets/nepse-agent-architecture.png)
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   Textual TUI                       │
-│  dashboard_tui.py  ·  9 tabs  ·  keyboard-driven    │
-└──────────┬──────────────────────┬───────────────────┘
-           │                      │
-    ┌──────▼──────┐      ┌────────▼────────┐
-    │  Market     │      │  Trading Engine │
-    │  Data Layer │      │  (per account)  │
-    │  nepse_data │      │  tui_trading_   │
-    │  .db        │      │  engine.py      │
-    └──────┬──────┘      └────────┬────────┘
-           │                      │
-    ┌──────▼──────────────────────▼────────┐
-    │          Signal Engine               │
-    │  simple_backtest.py                  │
-    │  volume · quality · low_vol ·        │
-    │  mean_reversion · xsec_momentum ·    │
-    │  quarterly_fundamental · satellite   │
-    └──────────────────────────────────────┘
-```
-
-### Components
-
-| Component | File | What it does |
+| Key | Tab | What you get |
 |---|---|---|
-| TUI | `apps/tui/dashboard_tui.py` | All UI — 9 tabs, keyboard shortcuts, paper order book |
-| Trading Engine | `backend/trading/tui_trading_engine.py` | Per-account auto-trading loop, regime filter, stop logic |
-| Paper Trader | `backend/trading/paper_trader.py` | Manual buy/sell execution, portfolio persistence |
-| Signal Engine | `backend/backtesting/simple_backtest.py` | All signal generation and backtest runner |
-| Strategy Registry | `backend/trading/strategy_registry.py` | Load, save, assign strategies per account |
-| Market Data | `backend/market/` | Price DB queries, quote scraping, 52wk calculations |
-| Validation | `validation/` | Walk-forward, Monte Carlo, CSCV, DSR, random baseline |
-| Gold Hedge | `backend/quant_pro/gold_hedge.py` | Gold/silver regime detection → capital deployment % |
-| AI Agent | `backend/agents/agent_analyst.py` (+ `llm_ollama.py`, `llm_openai.py`, `llm_anthropic.py`, `nepse_briefing.py`) | Portfolio and signal analysis on Ollama, OpenAI or Claude |
-| Paper Agent Graph | `backend/nepse_agents/` | Evidence-gated research/debate/risk/portfolio workflow; paper-only |
-| NEPSE Calendar | `backend/quant_pro/nepse_calendar.py` | Trading-day week (Mon–Fri default), public holidays, trading day counter |
+| `1` | Market | Gainers, losers, volume leaders, 52-week extremes, live quotes and a sector heatmap |
+| `2` | Portfolio | Holdings, realised and unrealised P&L, NAV history, sector concentration, drawdown and alpha against NEPSE |
+| `3` | Signals | Today's picks from your strategy, plus broker-flow panels (broker floor and top brokers by net quantity) |
+| `4` | Lookup | Any stock or the NEPSE index: volume chart (green up days, red down days), daily, weekly and monthly prices, key facts (market cap, P/E, P/B, ROE, yield, 52-week range), related stocks in the same sector, quarterly results, dividends and bonus shares, news and exchange filings, and 20-session broker flow |
+| `5` | Agents | AI analyst chat, a review of today's picks, and automatic market briefs |
+| `6` | Orders | Paper order ticket, today's order book and order history |
+| `7` | Watchlist | Your stocks and macro items in one table |
+| `8` | Rates & Commodities | Kalimati produce prices, forex rates and global rates and prices |
+| `9` | Account | Paper accounts, account setup and MeroShare import |
+| `0` | Strategies | Connected: your nepsequant.com strategies. Local: build, backtest and assign your own strategies |
+
+Also included:
+
+- **Backtesting and validation:** backtests on more than six years of NEPSE prices, with walk-forward replay, Monte Carlo, CSCV/PBO overfitting checks, the deflated Sharpe ratio and a random-baseline comparison.
+- **Local auto-trading engine:** when not connected, each paper account can run its own strategy in the background, with holding periods, stop-losses, trailing stops and a market-regime filter.
+- **Gold hedge overlay:** a gold and silver risk regime that scales how much capital the engine deploys.
+- **MeroShare import:** start a paper account from your MeroShare "My Shares Values.csv" export.
 
 ---
 
-## How Paper Trading Works
+## AI analyst
 
-Each account has its own directory under `data/runtime/accounts/account_N/` containing:
+The Agents tab works with a free local model (Ollama) or with your own OpenAI or Anthropic (Claude) API key. Set it up once from the terminal's folder:
 
-```
-paper_portfolio.csv      # open positions
-paper_trade_log.csv      # all executed trades
-paper_nav_log.csv        # daily NAV history
-paper_state.json         # cash balance + runtime state
-tui_paper_*              # engine auto-trade files
-watchlist.json           # symbols to track
+```bash
+./nqt-connect ai setup     # choose ollama, openai or anthropic; paste the key (hidden)
+./nqt-connect ai status    # provider, model and whether a key is saved (never the key itself)
+./nqt-connect ai off       # delete saved keys and go back to local Ollama
 ```
 
-**Manual trading** (Order tab) writes to `paper_portfolio.csv`.
-**Auto-trading** (engine) writes to `tui_paper_trade_log.csv` and reconciles with the manual portfolio on display.
+| Provider | Default model | Cost | You need |
+|---|---|---|---|
+| `ollama` | `llama3` (or any model you have installed) | Free, runs on your computer | [Ollama](https://ollama.com), e.g. `ollama pull llama3.2` |
+| `openai` | `gpt-5-mini` | Billed to your OpenAI key | An OpenAI API key |
+| `anthropic` | `claude-opus-5-5` (lower cost: `claude-haiku-5-5`) | Billed to your Anthropic key | An Anthropic API key |
 
-The Trade History tab merges both sources and deduplicates by `(Date, Action, Symbol, Shares, Price)`.
+What the analyst does:
+
+- **Knows your context:** your watchlist, your paper book's holdings and recent trades, and your assigned strategy with today's picks.
+- **Looks things up while it answers:** prices and key facts, price history, a company's news and filings, and the day's movers. Lookups are read-only (at most six per answer) and come from nepsequant.com when connected, otherwise from your local database. `NQT_AGENT_TOOLS=0` turns them off.
+- **Posts short briefs:** once a day and, on trading days, at 10:30, 13:00 and 15:15 Nepal time: what moved in your names and why, stocks that moved on news, and names worth researching. `/brief` runs one now; `/proactive off` stops them.
+- **Follows the same rules on every provider:** paper trading only, the same analysis format, and the trade-approval veto.
+
+Switch provider or model at any time in the Agents tab: `/agent openai`, `/agent anthropic claude-haiku-5-5`, `/agent ollama llama3.2`, or `/model <name>`. The header shows what is answering.
+
+Costs are billed to your own key; the terminal keeps requests small (recent chat turns only, trimmed context, capped answer length, cached system prompt).
+
+<details>
+<summary><b>Ollama step by step</b></summary>
+
+1. Install Ollama: `brew install ollama` (macOS) or `curl -fsSL https://ollama.com/install.sh | sh` (Linux). On Windows, use the installer from [ollama.com](https://ollama.com).
+2. Download a model that fits your memory:
+
+   | Model | Memory | Command |
+   |---|---|---|
+   | `llama3` | 8 GB | `ollama pull llama3` |
+   | `mistral` | 8 GB | `ollama pull mistral` |
+   | `phi3` | 4 GB | `ollama pull phi3` |
+   | `qwen2` | 8 GB | `ollama pull qwen2` |
+   | `llama3:70b` | 40 GB | `ollama pull llama3:70b` |
+
+3. Start the server: `ollama serve` (it listens on `http://localhost:11434`; set `OLLAMA_HOST` to use another machine).
+4. Start the terminal, open the Agents tab (`5`) and press `A` to analyse your picks, or type a question.
+
+</details>
+
+<details>
+<summary><b>Other backends: Gemma 4 on Apple Silicon, Claude CLI</b></summary>
+
+- **Gemma 4 (MLX, Apple Silicon only):** `pip install mlx-vlm`, then `/agent gemma4_mlx` in the Agents tab. The model (about 3 GB) downloads on first use.
+- **Claude CLI:** install Claude Code (`npm install -g @anthropic-ai/claude-code`), run `claude login`, then `/agent claude`.
+
+The chosen backend is saved in `data/runtime/agents/active_agent.json`. `OPENAI_BASE_URL` points the `openai` provider at any OpenAI-compatible server.
+
+</details>
 
 ---
 
-## How the Signal Engine Works
+## Keyboard shortcuts
 
-Signals are generated per trading date using price + fundamental data from `nepse_data.db`. Each signal scores symbols 0.0–1.0. Signals are combined with regime-dependent weights:
+| Key | Action |
+|---|---|
+| `1`–`9`, `0` | Switch tabs (see [What's inside](#whats-inside)) |
+| `L` | Look up a stock |
+| `D` `W` `M` `Y` `I` | Lookup chart: daily, weekly, monthly, yearly, intraday |
+| `Enter` | On a related stock or mover in Lookup: open it |
+| `A` | Run the AI analysis of your picks |
+| `R` | Refresh market data |
+| `F` | Reload signals |
+| `=` / `-` | Add the current stock to, or remove it from, the watchlist |
+| `/` or `Ctrl+P` | Go to anything (command palette) |
+| `Q` | Quit |
+
+---
+
+## Market data
+
+`python setup_data.py` downloads a pre-built database (about 13 MB): daily prices for every NEPSE symbol, quarterly earnings, corporate actions and benchmark history. The database is a snapshot, so keep it current for accurate signals and backtests:
+
+```bash
+python scripts/ingestion/deterministic_daily_ingestion.py   # daily update, after the market closes
+python setup_data.py --scrape --days 90                     # refill the last 90 days (~5 minutes)
+python setup_data.py --scrape                               # full historical rebuild (30–60 minutes)
+```
+
+When the terminal is connected to nepsequant.com, Lookup, the broker panels and the analyst's market briefing come from the website and need no local updates.
+
+NEPSE trades **Monday to Friday** by default (it moved from a Sunday–Thursday week in April 2026); set `NEPSE_TRADING_WEEK=sun_thu` for the old calendar. Holding periods are counted in trading days.
+
+---
+
+## Security and privacy
+
+- **Keys stay on your computer.** The nepsequant.com key is saved in `~/.config/nepse-quant-terminal/credentials.json` and AI keys in `ai.json` in the same folder, both readable only by you. Neither is ever displayed.
+- **Each key goes only where it belongs.** The nepsequant.com key is sent only to `https://nepsequant.com` over HTTPS and never through a redirect; AI keys are sent only to their provider. Keys are removed from error messages and from anything an AI model sees.
+- **Revocable at any time.** Revoke a key on nepsequant.com under Settings → AI agents, or run `./nqt-connect logout`.
+- **No real money.** Nothing in the terminal can reach a broker.
+
+---
+
+## For developers
+
+### Architecture
 
 ```
-Bull market  → xsec_momentum weight ×1.1, all others ×1.0
-Bear market  → capital preservation mode (fewer positions)
-Neutral      → standard weights
+┌──────────────────────────────────────────────────────────────┐
+│ Textual TUI · apps/tui/dashboard_tui.py · 10 tabs · keyboard │
+└───────┬──────────────────────┬───────────────────────┬───────┘
+        │                      │                       │
+┌───────▼───────┐   ┌──────────▼──────────┐   ┌────────▼──────────┐
+│ Local market  │   │ Paper trading       │   │ nepsequant.com    │
+│ database      │   │ paper_execution.py  │   │ (when connected)  │
+│ backend/market│   │ tui_trading_engine  │   │ apps/cli/connect  │
+└───────┬───────┘   └──────────┬──────────┘   │ apps/tui/io/      │
+        │                      │              │   website_*.py    │
+┌───────▼──────────────────────▼───────┐      └───────────────────┘
+│ Signal engine · simple_backtest.py   │
+│ volume · quality · low_vol ·         │
+│ mean_reversion · xsec_momentum ·     │
+│ quarterly_fundamental · satellite    │
+└──────────────────────────────────────┘
 ```
 
-Regime is detected via a 60-day rolling NEPSE return: bear below threshold, bull above 0, neutral in between.
+| Component | Location | Role |
+|---|---|---|
+| Terminal UI | `apps/tui/` | Tabs, panels, keyboard handling (Textual) |
+| nepsequant.com link | `apps/cli/connect.py`, `apps/tui/io/website_*.py` | Keys, shared paper book, lookup, strategies, floorsheet |
+| Website auto-trader | `apps/tui/io/strategy_autotrader.py` | Trades an assigned website strategy on the paper book |
+| Broker panels engine | `native/nqt_floor` (Rust, optional), `apps/tui/io/floor_metrics.py` | Broker-flow metrics; the Python version gives identical results |
+| Paper execution | `backend/trading/paper_execution.py` | Account-scoped paper orders and fills |
+| Local auto-trading engine | `backend/trading/tui_trading_engine.py` | Per-account strategy loop, regime filter, stops |
+| Signal engine and backtests | `backend/backtesting/simple_backtest.py` | Signal generation and the backtest runner |
+| Strategy registry | `backend/trading/strategy_registry.py` | Load, save and assign strategies |
+| AI analyst | `backend/agents/` | Providers (Ollama, OpenAI, Anthropic), lookups, briefs |
+| Paper agent graph | `backend/nepse_agents/` | Evidence-gated research, debate, risk and portfolio workflow (paper only) |
+| Validation | `validation/` | Walk-forward, Monte Carlo, CSCV/PBO, deflated Sharpe, random baseline |
+| Trading calendar | `backend/quant_pro/nepse_calendar.py` | Trading days and public holidays |
 
-The engine runs a **5-trading-day signal cycle** — signals fire every 5 days, not daily, avoiding overtrading and matching NEPSE's lower liquidity.
+![Paper agent workflow](docs/assets/nepse-agent-architecture.png)
 
-### Available Signals
+### Signals
+
+Each signal scores symbols from 0 to 1 on a given date; scores are combined with weights that depend on the market regime (a rolling 60-day NEPSE return classifies bull, neutral or bear). By default signals fire every five trading days, which avoids overtrading a thin market.
 
 | Signal | Logic |
 |---|---|
-| `volume` | Volume breakout above 20-day average with price confirmation |
-| `quality` | ROE + debt-to-equity + earnings stability composite |
-| `low_vol` | Low 60-day realized volatility with positive momentum |
-| `mean_reversion` | RSI oversold + distance below 52-week high |
-| `xsec_momentum` | Cross-sectional 6m-minus-1m momentum (skip last month) |
-| `quarterly_fundamental` | EPS growth + revenue growth from quarterly filings |
-| `satellite_hydro` | Hydropower generation signals from WECS rainfall data |
+| `volume` | Volume breakout above the 20-day average with price confirmation |
+| `quality` | ROE, debt-to-equity and earnings stability |
+| `low_vol` | Low 60-day realised volatility with positive momentum |
+| `mean_reversion` | RSI oversold and distance below the 52-week high |
+| `xsec_momentum` | Cross-sectional 6-month-minus-1-month momentum |
+| `quarterly_fundamental` | EPS and revenue growth from quarterly filings |
+| `satellite_hydro` | Hydropower signals from rainfall data |
 
----
+To add a signal, implement a function in `backend/backtesting/simple_backtest.py`, for example `generate_my_signal_at_date(symbols, date, prices_df)`, that returns a list of `{"symbol": str, "score": float 0–1, "reason": str}`. Register it in the `SIGNAL_MAP` dict inside `run_backtest()` and add `"my_signal"` to a strategy's `signal_types`.
 
-## How Backtesting Works
+### Backtests and validation
 
 ```python
 from backend.backtesting.simple_backtest import run_backtest
 
 results = run_backtest(
-    start_date="2020-01-01",   # required
-    end_date="2025-12-31",     # required
-    signal_types=["volume", "quality", "low_vol", "mean_reversion",
-                  "xsec_momentum", "quarterly_fundamental"],
+    start_date="2020-01-01",
+    end_date="2025-12-31",
+    signal_types=["volume", "quality", "low_vol", "mean_reversion", "xsec_momentum", "quarterly_fundamental"],
     holding_days=40,
     max_positions=5,
     stop_loss_pct=0.12,
@@ -176,55 +311,19 @@ results = run_backtest(
 )
 ```
 
-The walk-forward phase slides a train/test window across 6+ years of history, re-runs the backtest on each rolling test window, and stitches the out-of-sample equity curves together. Note: it **replays a fixed config** on each window — it does not re-select or re-fit parameters per window, so it is a robustness check, not true out-of-sample model selection. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md).
-
 ```bash
-python -m validation.run_all --fast
+python -m validation.run_all                      # full battery on the bundled C5 baseline
+python -m validation.run_all --fast               # quicker run with fewer simulations
+python -m validation.run_all --signals volume quality   # an ad-hoc signal set
+python -m validation.run_all --holding-days 60          # override one parameter on top of C5
+python -m validation.run_all --config legacy            # the older 3-signal configuration
 ```
 
-Outputs: stitched OOS equity curve, Sharpe, max drawdown, CSCV/PBO score, deflated Sharpe ratio, random baseline percentile.
+The suite prints a GO / NO-GO verdict and writes JSON and PDF reports to `reports/validation/`. The CSCV/PBO test and the alpha-versus-beta benchmark are reported but do not gate the verdict; read them anyway. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md) for what each test does and does not prove.
 
-### Validating the shipped strategy
+### Strategies
 
-The validation suite validates the bundled 6-signal C5 baseline (`configs/long_term.py` `LONG_TERM_CONFIG`) by default — the same strategy the auto-trading engine ships with — so the headline figure and the validated strategy are the same thing:
-
-```bash
-python -m validation.run_all          # full battery, C5 baseline
-python -m validation.run_all --fast   # quick mode (fewer simulations)
-```
-
-To validate a different strategy, override the config or individual parameters:
-
-```bash
-python -m validation.run_all --config legacy                 # old 3-signal volume/quality/low_vol config
-python -m validation.run_all --signals volume quality        # ad-hoc signal set
-python -m validation.run_all --holding-days 60               # override one parameter on top of C5
-```
-
-The suite prints a GO / NO-GO verdict and writes a JSON + PDF report under `reports/validation/`. The GO verdict is gated on a subset of the tests (base backtest, transaction costs, statistical significance, walk-forward, Monte Carlo, regime stress, sensitivity, random baseline, slippage, max drawdown). **The CSCV/PBO overfitting test and the benchmark (alpha-vs-beta) comparison run and report, but do not gate the verdict** — read them anyway. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md) for what each test does and does not prove.
-
----
-
-## How the Auto-Trading Engine Works
-
-When the TUI starts, one `TUITradingEngine` per account starts in a background daemon thread. Each engine:
-
-1. Loads its account's strategy config (signal types, holding days, stop params)
-2. Every 5 trading days: generates signals → ranks → buys top N symbols up to `max_positions`
-3. Every day: checks exits — trailing stop, stop loss, or holding period expiry
-4. Writes trades to `tui_paper_trade_log.csv` for that account
-5. Persists state so it survives TUI restarts
-
-Capital deployment adjusts by the gold hedge regime:
-- **Risk-off** → 90% of capital deployed
-- **Neutral** → 97%
-- **Risk-on** → 100%
-
----
-
-## How Strategies Work
-
-A strategy is a JSON config in `data/strategy_registry/`:
+A local strategy is a JSON file in `data/strategy_registry/`:
 
 ```json
 {
@@ -243,356 +342,57 @@ A strategy is a JSON config in `data/strategy_registry/`:
 }
 ```
 
-Create strategies in the **Strategies tab** → press **N NEW**, configure signals with the toggle buttons, set parameters, press **SAVE**. Assign to any account with **→ ACTIVE ACCT**.
+Without a nepsequant.com link, build strategies in the Strategies tab (**N NEW**, toggle signals, set parameters, **SAVE**) and assign one to a paper account with **→ ACTIVE ACCT**. Local paper accounts live in `data/runtime/accounts/account_N/` (positions, trade log, NAV history, cash and watchlist).
 
----
-
-## Adding Custom Signals
-
-Implement a function in `backend/backtesting/simple_backtest.py`:
-
-```python
-def generate_my_signal_at_date(
-    symbols: list[str],
-    date: str,
-    prices_df: pd.DataFrame,
-) -> list[dict]:
-    # Return list of {"symbol": str, "score": float 0-1, "reason": str}
-    ...
-```
-
-Register it in the `SIGNAL_MAP` dict inside `run_backtest()` and add `"my_signal"` to any strategy's `signal_types`.
-
----
-
-## Setup
-
-### Easy launch for nontechnical users
-
-After downloading or cloning the repo, use the double-click launcher for your OS:
-
-- macOS: `Nepse Quant Terminal.app` or `Launch Quant Terminal.command`
-- Windows: `Launch Quant Terminal.bat`
-
-The launcher creates `.venv`, installs dependencies, downloads the bundled market database if missing, runs preflight, and starts the TUI.
-
-See [`docs/EASY_LAUNCH.md`](docs/EASY_LAUNCH.md) for troubleshooting notes and macOS security prompt handling.
-
-### Requirements
-
-- Python 3.10–3.13 (recommended: 3.12) — Python 3.14+ is **not yet supported** (numba and the nepse package both cap at `<3.14`)
-- macOS, Linux, or native Windows PowerShell. WSL/container remains useful for scheduled production-style runs, but is not required for dashboard, backtests, or paper autopilot.
-
-### Installation
+### Tests
 
 ```bash
-git clone https://github.com/nlethetech/nepse-quant-terminal
-cd nepse-quant-terminal
-pip install -r requirements.txt
+python -m pytest tests/
 ```
 
-Native Windows PowerShell:
+The tests run offline in a throwaway home folder: they never read your real keys or settings, and any attempt to reach the internet fails the run. CI runs them on macOS, Windows and Ubuntu.
 
-```powershell
-git clone https://github.com/nlethetech/nepse-quant-terminal
-cd nepse-quant-terminal
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-python -m pip install -r requirements.txt
-python -m scripts.ops.windows_preflight
-```
+### Optional: Rust engine for the broker panels
 
-### Database
-
-Run the setup script — it downloads the pre-built database (~13 MB) from the GitHub release automatically:
-
-```bash
-python setup_data.py
-```
-
-Takes under a minute. You get 456K rows of OHLCV history for all NEPSE symbols, quarterly earnings, corporate actions, and benchmark history — enough for the signal engine, backtests, and charts to work immediately.
-
-> **Important:** The bundled database is a snapshot. For accurate signals and backtests you must keep it up to date with fresh scraped data. The pre-built DB covers history through the release date — anything after that requires running the scraper.
-
-**Scrape fresh data yourself (to keep the snapshot current):**
-```bash
-python setup_data.py --scrape           # full historical scrape from Merolagani (~30–60 min)
-python setup_data.py --scrape --days 90 # last 90 days only (~5 min)
-```
-
-**Daily incremental update** — run this after market close each day to keep data current:
-```bash
-python scripts/ingestion/deterministic_daily_ingestion.py
-```
-
-> The signal engine (volume breakout, momentum, quarterly fundamental, etc.) relies on recent price history. Stale data = stale signals. Set up a daily cron job or run the ingestion script manually each evening.
-
-### Optional: native speed-up for the broker panels
-
-The broker panels are computed in plain Python (numpy) by default. An optional Rust module computes the same numbers about five times faster; everything works without it. To build it you need [Rust](https://rustup.rs):
+The broker panels run in Python by default. An optional Rust module computes the same numbers about five times faster:
 
 ```bash
 pip install maturin && maturin develop --release -m native/nqt_floor/Cargo.toml
 ```
 
-It installs into the Python environment you run the terminal with. Set `NQT_FLOOR_ENGINE=python` to ignore it.
-
-### Run
-
-```bash
-python -m apps.tui.dashboard_tui
-```
-
-On Windows PowerShell, run the same command after activating `.venv`:
-
-```powershell
-python -m apps.tui.dashboard_tui
-```
-
-Paper strategy autopilot is broker-free. Manual orders and strategy orders use the same account-scoped paper execution service, fill from latest market quotes, write visible rejected/filled order history, and persist the canonical files under `data/runtime/accounts/account_N/`.
+Set `NQT_FLOOR_ENGINE=python` to ignore it.
 
 ---
 
-## AI Agent Setup
+## Disclaimer and limitations
 
-The Agents tab provides on-demand equity analysis of your signal shortlist and portfolio. Ollama is the default backend; OpenAI, Claude (Anthropic API), Gemma 4 MLX and the Claude CLI are optional.
+This software is for research and education. It is **not financial advice** and nothing in it is a recommendation to buy or sell any security. It cannot place real orders. Past performance, simulated or historical, does not indicate future results.
 
-### AI analyst: Ollama, OpenAI or Claude
+Backtests have limits that make headline returns look better than real trading would:
 
-Pick the AI once, from the repository folder:
+- **In-sample figures.** The bundled C5 baseline's historical +88% return (Sharpe about 2.2, against NEPSE +27%) comes from a parameter sweep. It is not corrected for the number of variants tried, and the repository includes nothing that reproduces it as a forward-tested result.
+- **No slippage in the base engine.** `run_backtest` charges fees but fills at the open with no slippage; slippage is estimated only in the validation suite (`validation/slippage.py`).
+- **Limit-locked days still fill.** Entry prices are clamped to the ±10% circuit band, so a stock locked at its limit still "fills" at a price that often could not be traded.
+- **Survivorship bias.** The universe is the set of symbols in the current database; delisted and suspended stocks are not reconstructed point-in-time.
 
-```bash
-./nqt-connect ai setup     # choose ollama, openai or anthropic; paste the key (hidden); Enter keeps the default model
-./nqt-connect ai status    # provider, model, and whether a key is saved (the key itself is never shown)
-./nqt-connect ai off       # delete saved keys and go back to local Ollama
-```
-
-| Provider | Default model | Cost | Needs |
-|---|---|---|---|
-| `ollama` | `llama3` (uses an installed model if that one is missing) | free, runs on your computer | [Ollama](https://ollama.com) and `ollama pull llama3.2` |
-| `openai` | `gpt-5-mini` | billed to your OpenAI key | an OpenAI API key |
-| `anthropic` | `claude-opus-5-5` (low-cost: `claude-haiku-5-5`) | billed to your Anthropic key | an Anthropic API key and `pip install anthropic` |
-
-Switch any time in the Agents tab (key 5): `/agent openai`, `/agent anthropic claude-haiku-5-5`, `/agent ollama llama3.2`, or `/model <name>` for the current provider. The header shows what is answering, e.g. `CLAUDE · claude-opus-5-5`.
-
-- **Costs are on your own key.** Each chat answer and each picks analysis is one request to your provider. The terminal keeps requests small (last few chat turns only, trimmed context, capped answer length, cached system prompt) and reuses a fresh analysis instead of re-running it.
-- **Keys stay on your computer**, in `~/.config/nepse-quant-terminal/ai.json` (owner-only permissions), and are sent only to the provider they belong to. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` environment variables take priority. Never paste a key into the chat box: the terminal refuses anything that looks like a key, because chat history is saved to disk.
-- **NEPSE Quant data:** when the terminal is linked (`./nqt-connect login`), the analyst also reads your account's market briefing from nepsequant.com (market phase, NEPSE close, regime, breadth, top movers, latest news with sources, disclosures), refreshed every five minutes, and can cite it. Not linked or offline: it simply works without it.
-- **It knows your context.** Every answer sees your watchlist (the terminal's, plus your nepsequant.com watchlist when linked), the holdings and recent trades of the paper book in use, and your assigned strategy with today's picks. "Research my watchlist" just works; it never asks for tickers it already has.
-- **It can look things up while it answers** (OpenAI, Claude, and Ollama models with tool calling): price and key-facts snapshot for up to 20 names, up to 120 sessions of price history, a company's news and filings, the day's movers with the news behind them, and your own watchlist, holdings and trades. Read-only (nothing can place an order), at most 6 lookups per answer; linked, the lookups come from nepsequant.com, otherwise from your local market database. Models without tool calling get the same data fetched up front. `NQT_AGENT_TOOLS=0` turns lookups off.
-- **Automatic briefs.** With a provider set up, the analyst posts a short brief into the chat once a day, and on trading days at pre-open (10:30), mid-session (13:00) and after the close (15:15 NPT): what moved in your names and why, stocks that moved on news and how they may react, and a few names worth researching from your own history. One model call per brief, never repeated for the same window. `/brief` runs one now; `/proactive off` (or `NQT_AGENT_PROACTIVE=0`) stops the automatic ones.
-- Same rules everywhere: paper trading only, the same analyst rules and verdict format, and the trade-approval veto. `OPENAI_BASE_URL` points `openai` at any OpenAI-compatible server; `OLLAMA_HOST` points `ollama` at another machine.
-
-### Option 1 — Ollama (recommended, any hardware)
-
-Ollama runs any open-source model locally via a simple REST server. No Apple Silicon required.
-
-**Step 1 — Install Ollama**
-```bash
-# macOS
-brew install ollama
-
-# Linux
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-**Step 2 — Pull a model**
-
-Pick one based on your available RAM:
-
-| Model | RAM | Command | Notes |
-|---|---|---|---|
-| `llama3` | 8 GB | `ollama pull llama3` | Good all-rounder |
-| `mistral` | 8 GB | `ollama pull mistral` | Fast, sharp reasoning |
-| `phi3` | 4 GB | `ollama pull phi3` | Runs on low-end hardware |
-| `qwen2` | 8 GB | `ollama pull qwen2` | Strong on structured output |
-| `llama3:70b` | 40 GB | `ollama pull llama3:70b` | Best quality, high-end only |
-
-**Step 3 — Start the Ollama server**
-```bash
-ollama serve
-# Runs at http://localhost:11434 by default
-```
-
-**Step 4 — Optional: change the default model**
-
-The terminal defaults to:
-
-```json
-{
-  "selected_preset": "ollama",
-  "backend": "ollama",
-  "model": "llama3",
-  "ollama_host": "http://localhost:11434"
-}
-```
-
-`data/runtime/agents/active_agent.json` is created automatically on first run. To use a different Ollama model, either use the Agents tab command box:
-
-```text
-/agent ollama gemma4:e2b
-```
-
-or edit `data/runtime/agents/active_agent.json`:
-
-```json
-{
-  "selected_preset": "ollama",
-  "backend": "ollama",
-  "model": "mistral",
-  "ollama_host": "http://localhost:11434"
-}
-```
-
-You can also keep the current backend and only change its model:
-
-```text
-/model mistral
-```
-
-**Step 5 — Run the terminal**
-```bash
-python -m apps.tui.dashboard_tui
-```
-
-Open the Agents tab and hit **Analyze** — the agent will pull your current shortlist and return a structured bull/bear breakdown per stock.
+Read the deflated Sharpe ratio, the random-baseline percentile and the benchmark comparison from `python -m validation.run_all` rather than the headline return. The terminal is still being improved toward parity with [nepsequant.com](https://nepsequant.com); for the most complete experience today, use the website.
 
 ---
 
-### Option 2 — Gemma 4 MLX (Apple Silicon only)
+## Contributing
 
-Runs Gemma 4 directly in-process via MLX. No server needed — faster response on M-series chips.
+Bug reports and pull requests are welcome. Please run `python -m pytest tests/` before opening a pull request, and include evidence for any change to how figures are calculated. By contributing, you agree that your contribution is licensed under the AGPL-3.0 (see [License](#license)).
 
-```bash
-pip install mlx-vlm
-# Model (~3 GB) downloads automatically on first use
-```
-
-To use this backend, run this in the Agents tab command box or set the same preset in `data/runtime/agents/active_agent.json`:
-
-```text
-/agent gemma4_mlx
-```
-
----
-
-### Option 3 — Claude CLI
-
-Claude is optional and never used as the default fallback.
-
-```bash
-# Install Claude Code CLI
-npm install -g @anthropic-ai/claude-code   # or via brew
-
-# Authenticate
-claude login
-```
-
-Then set `active_agent.json` backend to `"claude"`, or switch from the TUI:
-
-```text
-/agent claude
-```
-
----
-
-### Switching backends at runtime
-
-All backends are hot-swappable without restarting the terminal. In the Agents tab chat box:
-
-```text
-/agent
-/agent list
-/agent ollama gemma4:e2b
-/agent openai gpt-5-mini
-/agent anthropic claude-opus-5-5
-/agent gemma4_mlx
-/agent claude
-/model qwen2
-/brief            # a brief now: your names, news-linked movers, names worth researching
-/proactive off    # stop the automatic briefs (/proactive on to restart)
-```
-
-The setting persists to `data/runtime/agents/active_agent.json`.
-
----
-
-## Keyboard Shortcuts
-
-| Key | Action |
-|---|---|
-| `1`–`9` | Switch tabs |
-| `R` | Refresh market data |
-| `B` | Buy (paper) |
-| `S` | Sell (paper) |
-| `N` | New account |
-| `A` | Activate account |
-| `W` | Sync watchlist |
-| `H` | Help / shortcuts |
-| `Q` | Quit |
-
----
-
-## Project Structure
-
-```
-nepse-quant-terminal/
-├── apps/tui/
-│   ├── dashboard_tui.py        # Main TUI application
-│   └── dashboard_tui.tcss      # Textual CSS styles
-├── backend/
-│   ├── trading/
-│   │   ├── paper_trader.py         # Manual paper order execution
-│   │   ├── live_trader.py          # Portfolio persistence utilities
-│   │   ├── tui_trading_engine.py   # Per-account auto-trading engine
-│   │   └── strategy_registry.py    # Strategy load/save/assign
-│   ├── backtesting/
-│   │   └── simple_backtest.py      # Signal engine + backtest runner
-│   ├── market/                     # Market data, quotes, scraping
-│   ├── agents/                     # AI agent (Ollama / Gemma MLX / Claude)
-│   └── quant_pro/
-│       ├── gold_hedge.py           # Gold regime overlay
-│       ├── satellite_data.py       # Hydropower signal data
-│       ├── regime_detection.py     # Market regime classifier
-│       └── paths.py                # Project path utilities
-├── configs/
-│   └── long_term.py            # Default strategy parameters (C5 baseline)
-├── data/
-│   └── strategy_registry/      # Strategy JSON configs
-├── validation/                 # Statistical validation suite
-│   ├── walk_forward.py
-│   ├── monte_carlo.py
-│   ├── cscv_pbo.py
-│   ├── statistical_tests.py
-│   └── run_all.py
-└── requirements.txt
-```
-
-The NEPSE trading calendar lives at `backend/quant_pro/nepse_calendar.py`.
-
----
-
-## Notes
-
-- **Paper trading only.** No broker API. All trades are simulated locally.
-- NEPSE trades **Monday–Friday** by default (it switched from Sunday–Thursday in April 2026). Set `NEPSE_TRADING_WEEK=sun_thu` to use the legacy calendar. The calendar module handles public holidays.
-- Holding periods are in **trading days**, not calendar days. 40 trading days ≈ 8 NEPSE weeks.
-- The backtest includes realistic transaction costs: SEBON levy, broker commission, DP charges.
-- The gold hedge module uses Nepal Rastra Bank gold price data — no external API required.
-
-### Backtest caveats (read before trusting any return figure)
-
-The base backtest engine is intentionally simple, and these limitations inflate headline returns:
-
-- **No slippage in the base engine.** `run_backtest` charges fees but fills at the open with zero slippage. Slippage is only estimated in a separate validation phase (`validation/slippage.py`); the +88% figure does not include it.
-- **Circuit-locked days fill at the band.** Entry prices are clamped to the ±10% circuit limit (`apply_circuit_breaker`), so a day where a stock is limit-locked still "fills" at the band — a price you often could not actually transact at on a thin NEPSE name.
-- **Survivorship bias.** The universe is the set of symbols currently in the bundled database (a static snapshot). Delisted/suspended names are not reconstructed point-in-time, which biases historical results upward.
-
-Run `python -m validation.run_all` and read the deflated Sharpe, random-baseline percentile, and benchmark (alpha vs. beta) outputs rather than the headline return. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md).
+Thanks to everyone who has contributed, including Saurab Shrestha for the EPS annualization fix (#32) and Prabesh Aryal for the Windows compatibility fixes.
 
 ---
 
 ## License
 
-MIT
+Copyright (C) 2026 nlethetech and contributors.
+
+NEPSE Quant Terminal is free software, licensed under the **GNU Affero General Public License v3.0** (see [LICENSE](LICENSE)). You may use, study, change and share it. If you distribute a modified version, or run one for other people over a network, you must make its complete source code available under the same licence.
+
+Earlier versions of this repository were published under the MIT License. Copies obtained under those terms, and contributions made under them, remain available under MIT.
+
+The nepsequant.com website, its data and its services are separate from this repository and are not covered by this licence.
