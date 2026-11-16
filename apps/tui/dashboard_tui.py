@@ -441,6 +441,8 @@ class NepseDashboard(
     _agent_chat_stop_requested: bool = False
     _agent_chat_busy: bool = False
     _agent_analysis_running: bool = False
+    _agent_brief_running: bool = False
+    _agent_brief_skip_until: float = 0.0
     _screener_sort: str = "chg"  # screener sort column
     _screener_filter: str = ""   # screener sector filter
     _refresh_inflight: bool = False

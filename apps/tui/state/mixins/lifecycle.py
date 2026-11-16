@@ -140,6 +140,7 @@ class LifecycleMixin:
         self._refresh_order_action_buttons()
         self._paper_watchlist = _load_watchlist()
         self._watchlist = list(self._paper_watchlist)
+        self._install_agent_context_provider()
         self._populate_watchlist()
         self._populate_signals_workspace()
         self._load_signals_async()
@@ -159,6 +160,10 @@ class LifecycleMixin:
         self.set_interval(30, self._auto_refresh)
         self.set_interval(TICKER_SPEED, self._scroll_ticker)
         self.set_interval(0.45, self._animate_agent_typing)
+        # The analyst's automatic brief: checked every minute, first ~20 s after start
+        # (once the shared book and strategies have loaded).
+        self.set_timer(20, self._agent_proactive_tick)
+        self.set_interval(60, self._agent_proactive_tick)
 
         # Start one auto-trading engine per account in background threads.
         # Not with the shared website book: automatic trading would trade a
