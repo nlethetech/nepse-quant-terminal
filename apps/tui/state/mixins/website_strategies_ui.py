@@ -155,12 +155,18 @@ class WebsiteStrategiesMixin:
                     "You have no strategies on nepsequant.com yet. Build one in the Lab (rules or a signal blend) "
                     "or save a Screener screen, backtest it, then press REFRESH.", style=LABEL))
             else:
-                lines = ws.describe(selected)
+                picks_now = strategies.cached_picks(selected.get("id"))
+                gate = ws.gate_of(selected, picks_now)  # the picks' copy is the fresher one
+                lines = ws.describe({**selected, "gate": gate} if gate is not None else selected)
                 is_assigned = selected.get("id") == strategies.assigned
                 body = Text()
                 body.append(lines[0] + "\n", style=f"bold {AMBER}")
+                glines = ws.gate_lines(gate) if gate else []
                 for line in lines[1:]:
-                    body.append(line + "\n", style=WHITE)
+                    if glines and line == glines[0]:  # INVESTED / CASH since …
+                        body.append(line + "\n", style=f"bold {GAIN_HI if gate.get('invested') else AMBER}")
+                    else:
+                        body.append(line + "\n", style=CYAN if line in glines else WHITE)
                 if is_assigned:
                     picks = strategies.cached_picks(selected.get("id"))
                     if picks and picks.rows:
@@ -295,7 +301,8 @@ class WebsiteStrategiesMixin:
             else:
                 when = picks.as_of or "?"
                 err = f"  |  {picks.error[:60]}" if picks.error else ""
-                title = f"SIGNALS — {name} · {len(picks.rows)} picks · {when}{err}"
+                gate = ws.gate_title(ws.gate_of(assigned, picks))
+                title = f"SIGNALS — {name} · " + (f"{gate} · " if gate else "") + f"{len(picks.rows)} picks · {when}{err}"
             for r in (picks.rows if picks else []):
                 score = r.get("score")
                 ltp = r.get("ltp")

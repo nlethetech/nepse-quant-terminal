@@ -13,11 +13,25 @@ backtest (apps/tui/io/website_strategies.py ``trading_params``):
   (computed by the website), equal-weight (book value / max positions), up to
   the position limit, within the sector cap and the cash available, as market
   orders.
+* **A market filter (gate), when the strategy has one** (the website's
+  research strategies, e.g. AK1 with its K03 filter): while the gate says
+  cash, every position the auto-trader manages is sold ("K03 says cash") and
+  nothing is bought; when it turns invested again the next pass buys the
+  fresh selection. While invested, the website's selection is a HOLDING LIST:
+  a new selection (its ``selection_date`` changes) is the rebalance day —
+  managed positions no longer selected are sold (and retried on later passes
+  if a sell could not go through), the new names are bought at equal weight
+  (book value / number of selected names, at most max positions), names still
+  selected are kept. Nothing is traded in between.
 * **Guards:** paper only (the website book), only while the website says
-  NEPSE is open, nothing twice in a day for the same stock, a daily order
-  cap, picks older than a few days are not bought, and every decision is
-  logged. The website itself still applies NEPSE's rules (T+2, same-day,
-  price band, hours) and refuses anything that breaks them.
+  NEPSE is open, nothing twice in a day for the same stock, nothing sold on
+  the day it was bought or before it settles (T+2), a daily order cap, picks
+  older than a few days are not bought, and every decision is logged. The
+  website itself still applies NEPSE's rules (T+2, same-day, price band,
+  hours) and refuses anything that breaks them.
+
+A rule set to 0 is OFF (no stop-loss, no trailing stop, no holding limit);
+no sector cap when the strategy sends none (``sector_limit`` None).
 
 ``plan()`` is pure (no I/O) so the rules are easy to test; ``AutoTrader``
 holds the small state file and talks to the book.
@@ -48,6 +62,7 @@ except ImportError:
 
 STATE_FILE = Path(get_runtime_dir(__file__)) / "website_book" / "autotrader.json"
 STALE_PICKS_DAYS = 4  # weekdays: older picks are not bought
+SETTLE_DAYS = 2  # T+2: shares bought on T can be sold from the second trading day after T
 FEE_BUFFER = 0.985  # leave room for broker commission, SEBON fee and DP charge
 LOG_KEEP = 60
 
@@ -95,6 +110,7 @@ def fresh_state(strategy_id: Optional[str] = None) -> dict[str, Any]:
         "enabled": False,
         "strategy_id": strategy_id,
         "last_rebalance": None,
+        "last_selection": None,
         "managed": {},
         "day": None,
         "done_today": [],
@@ -106,7 +122,7 @@ def fresh_state(strategy_id: Optional[str] = None) -> dict[str, Any]:
 def plan(
     *,
     today: date,
-    params: dict[str, float],
+    params: dict[str, Any],
     picks: list[dict[str, Any]],
     picks_as_of: Optional[str],
     positions: list[dict[str, Any]],
@@ -114,8 +130,12 @@ def plan(
     nav: float,
     open_orders: list[dict[str, Any]],
     state: dict[str, Any],
+    gate: Optional[dict[str, Any]] = None,
 ) -> tuple[list[Planned], dict[str, Any], list[str]]:
-    """The orders the strategy wants now, the updated state, and notes."""
+    """The orders the strategy wants now, the updated state, and notes.
+
+    ``gate`` is the strategy's market filter (None for a strategy without one):
+    ``{"invested": bool, "since": date, "selection_date": date, ...}``."""
     st = json.loads(json.dumps(state))  # never mutate the caller's copy
     notes: list[str] = []
     if st.get("day") != today.isoformat():
@@ -136,6 +156,22 @@ def plan(
     budget_orders = max(0, max_orders - len(st.get("done_today", [])))
     orders: list[Planned] = []
 
+    def sellable(sym: str, info: dict[str, Any]) -> bool:
+        bought = _d(info.get("bought"))
+        if bought == today or ("SELL", sym) in done or ("SELL", sym) in pending:
+            return False
+        return bought is None or weekdays_between(bought, today) >= SETTLE_DAYS
+
+    def sell_all(reason: str) -> None:
+        for sym, info in sorted(managed.items()):
+            if sellable(sym, info) and len(orders) < budget_orders and not any(o.symbol == sym for o in orders):
+                pos = held[sym]
+                orders.append(Planned("SELL", sym, int(_f(pos.get("quantity"))), reason, _f(pos.get("last"))))
+
+    stop_pct = _f(params.get("stop_loss_pct"))
+    trail_pct = _f(params.get("trailing_stop_pct"))
+    hold_days = int(_f(params.get("holding_days")))
+
     # ── exits: only what the auto-trader bought ──────────────────────────────
     for sym, info in sorted(managed.items()):
         pos = held[sym]
@@ -143,29 +179,56 @@ def plan(
         if last > 0:
             info["hwm"] = max(_f(info.get("hwm")), last)
         bought = _d(info.get("bought"))
-        if bought == today or ("SELL", sym) in done or ("SELL", sym) in pending:
+        if not sellable(sym, info):
             continue
         cost = _f(pos.get("avg_cost"))
         reason = ""
-        if last > 0 and cost > 0 and last <= cost * (1 - params["stop_loss_pct"] / 100.0):
-            reason = f"stop-loss {params['stop_loss_pct']:.0f}% (bought {cost:,.1f}, now {last:,.1f})"
-        elif last > 0 and _f(info.get("hwm")) > 0 and last <= _f(info["hwm"]) * (1 - params["trailing_stop_pct"] / 100.0):
-            reason = f"trailing stop {params['trailing_stop_pct']:.0f}% from {float(info['hwm']):,.1f}"
-        elif bought and weekdays_between(bought, today) >= int(params["holding_days"]):
-            reason = f"held {weekdays_between(bought, today)} trading days (limit {int(params['holding_days'])})"
+        if stop_pct > 0 and last > 0 and cost > 0 and last <= cost * (1 - stop_pct / 100.0):
+            reason = f"stop-loss {stop_pct:.0f}% (bought {cost:,.1f}, now {last:,.1f})"
+        elif trail_pct > 0 and last > 0 and _f(info.get("hwm")) > 0 and last <= _f(info["hwm"]) * (1 - trail_pct / 100.0):
+            reason = f"trailing stop {trail_pct:.0f}% from {float(info['hwm']):,.1f}"
+        elif hold_days > 0 and bought and weekdays_between(bought, today) >= hold_days:
+            reason = f"held {weekdays_between(bought, today)} trading days (limit {hold_days})"
         if reason and len(orders) < budget_orders:
             orders.append(Planned("SELL", sym, int(_f(pos.get("quantity"))), reason, last))
 
+    as_of = _d(picks_as_of)
+    fresh = as_of is not None and weekdays_between(as_of, today) <= STALE_PICKS_DAYS
+
+    # ── a market filter: cash = sell everything we manage, buy nothing ───────
+    if gate is not None and not gate.get("invested"):
+        since = f" since {gate['since']}" if gate.get("since") else ""
+        sell_all(f"{gate.get('filter') or 'K03'} says cash{since}")
+        st["last_rebalance"] = None  # re-entry is a fresh selection
+        st["last_selection"] = None
+        if managed:
+            notes.append(f"{gate.get('filter') or 'K03'} says cash{since}: selling what auto-trade bought, buying nothing.")
+        return orders, st, notes
+
+    selected = {str(p.get("symbol") or "").upper() for p in picks if p.get("symbol")}
+    rotating = gate is not None
+    if rotating and picks and fresh:
+        # a holding list: anything we manage that is no longer selected goes (retried until it does)
+        for sym, info in sorted(managed.items()):
+            if sym not in selected and sellable(sym, info) and len(orders) < budget_orders \
+                    and not any(o.symbol == sym for o in orders):
+                pos = held[sym]
+                orders.append(Planned("SELL", sym, int(_f(pos.get("quantity"))), "no longer in the selection",
+                                      _f(pos.get("last"))))
+
     # ── entries: rebalance days only ─────────────────────────────────────────
     last_rb = _d(st.get("last_rebalance"))
-    due = last_rb is None or weekdays_between(last_rb, today) >= int(params["rebalance_days"])
+    sel_date = (gate or {}).get("selection_date")
+    if rotating and sel_date:
+        due = last_rb is None or st.get("last_selection") != sel_date
+    else:
+        due = last_rb is None or weekdays_between(last_rb, today) >= int(params["rebalance_days"])
     if not due:
         return orders, st, notes
-    as_of = _d(picks_as_of)
     if not picks:
         notes.append("No picks from the website yet; buying waits.")
         return orders, st, notes
-    if as_of is None or weekdays_between(as_of, today) > STALE_PICKS_DAYS:
+    if not fresh:
         notes.append(f"The strategy's picks are from {picks_as_of or 'an unknown date'}; not buying on stale picks.")
         return orders, st, notes
 
@@ -173,8 +236,14 @@ def plan(
     kept = [s for s in managed if s not in selling]
     pending_buys = [s for (a, s) in pending if a == "BUY"]
     slots = max_pos - len(kept) - len(pending_buys)
-    target = nav / max_pos if nav > 0 else 0.0
+    # equal weight: of the book over max positions, or — for a holding list —
+    # over the names selected (the research holds 1/n of each)
+    weight_n = max(1, min(max_pos, len(selected))) if rotating else max_pos
+    target = nav / weight_n if nav > 0 else 0.0
     budget = max(0.0, cash) * FEE_BUFFER
+    if rotating:  # the sells above go first, so their proceeds pay for the new names
+        budget += sum(o.qty * o.price for o in orders if o.action == "SELL") * FEE_BUFFER
+    sector_cap = params.get("sector_limit")
     sector_value: dict[str, float] = {}
     for s in kept:
         sec = str(managed[s].get("sector") or "")
@@ -191,20 +260,25 @@ def plan(
             continue
         if price <= 0:
             continue
-        if sector and nav > 0 and (sector_value.get(sector, 0.0) + target) / nav * 100.0 > params["sector_limit"] + 1e-9:
-            notes.append(f"Skipped {sym}: sector cap {params['sector_limit']:.0f}% for {sector}.")
+        if sector_cap is not None and sector and nav > 0 \
+                and (sector_value.get(sector, 0.0) + target) / nav * 100.0 > float(sector_cap) + 1e-9:
+            notes.append(f"Skipped {sym}: sector cap {float(sector_cap):.0f}% for {sector}.")
             continue
         qty = int(min(target, budget) // (price * 1.01))  # 1% room for the market price moving
         if qty < 1:
             notes.append(f"Skipped {sym}: not enough cash for one share.")
             continue
         rank = pick.get("rank")
-        orders.append(Planned("BUY", sym, qty, f"rank {rank} in today's picks" if rank else "today's picks", price, sector))
+        why = (f"selection of {sel_date}, rank {rank}" if rotating and sel_date
+               else f"rank {rank} in today's picks" if rank else "today's picks")
+        orders.append(Planned("BUY", sym, qty, why, price, sector))
         budget -= qty * price * 1.01
         slots -= 1
         if sector:
             sector_value[sector] = sector_value.get(sector, 0.0) + qty * price
     st["last_rebalance"] = today.isoformat()
+    if rotating:
+        st["last_selection"] = sel_date
     return orders, st, notes
 
 
@@ -315,11 +389,19 @@ class AutoTrader:
             return ["Auto-trade switched off: the assigned strategy changed"]
         if not book.can_trade or book.market_open is not True:
             return []
-        from apps.tui.io.website_strategies import trading_params
+        from apps.tui.io.website_strategies import gate_of, trading_params
 
         strategy = strategies.get(sid) or {}
         params, _source = trading_params(strategy)
         picks = strategies.picks(sid)
+        if getattr(picks, "error", "") and (strategy.get("gate") is not None or getattr(picks, "gate", None)):
+            # a gated strategy acts on its filter: never on a failed read
+            note = f"Could not read the strategy's picks ({str(picks.error)[:80]}); waiting."
+            if note not in self.state.get("notes_today", []):
+                self.state.setdefault("notes_today", []).append(note)
+                self._log(note)
+                self.save()
+            return []
         open_rows, _history = book.order_records()
         orders, new_state, notes = plan(
             today=today,
@@ -331,6 +413,7 @@ class AutoTrader:
             nav=book.value(),
             open_orders=[{"action": o["action"], "symbol": o["symbol"]} for o in open_rows],
             state=self.state,
+            gate=gate_of(strategy, picks),
         )
         self.state = new_state
         shown: list[str] = []

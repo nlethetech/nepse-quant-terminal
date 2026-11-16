@@ -2,7 +2,10 @@
 
 When the terminal is linked to a nepsequant.com account, its strategies come
 from the website: the Lab rule sets, Lab signal blends and saved Screener
-screens the user built (and backtested) there. The terminal does not build or
+screens the user built (and backtested) there — and, for the desk owner only,
+the website's research strategies (kind ``research``, e.g. AK1). A research
+strategy carries a ``gate`` (the K03 market filter: invested or cash, since
+when, its three gauges); while the gate says cash it holds nothing. The terminal does not build or
 edit strategies. It lists them, lets the user assign one, shows that
 strategy's picks for today (computed by the website, the same way it shows
 them), and can auto-trade the assigned strategy on the shared paper book
@@ -24,7 +27,7 @@ from apps.cli import connect
 
 PICKS_TTL_S = 300.0  # the website recomputes picks at most a few times a day
 WARMING_RETRY_S = 30.0
-KIND_LABEL = {"rules": "RULES", "blend": "BLEND", "screen": "SCREEN"}
+KIND_LABEL = {"rules": "RULES", "blend": "BLEND", "screen": "SCREEN", "research": "RESEARCH"}
 
 # Trading rules used when a strategy carries none (a saved screen, or a rule
 # set that was never backtested). Shown on screen as "default".
@@ -53,28 +56,92 @@ def _sector_pct(value: Any) -> Optional[float]:
     return v * 100.0 if 0 < v <= 1.0 else v
 
 
-def trading_params(strategy: dict[str, Any]) -> tuple[dict[str, float], str]:
-    """The strategy's trading rules and where they came from."""
+def trading_params(strategy: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """The strategy's trading rules and where they came from.
+
+    A rule the strategy sets to 0 is OFF: ``stop_loss_pct`` 0 = no stop-loss,
+    ``trailing_stop_pct`` 0 = no trailing stop, ``holding_days`` 0 = no
+    holding limit. ``sector_limit`` sent as null = no sector cap (None here).
+    A rule the strategy does not send keeps the default."""
     raw = dict(strategy.get("params") or {})
-    out = dict(DEFAULT_PARAMS)
+    out: dict[str, Any] = dict(DEFAULT_PARAMS)
     used = False
-    for key in ("max_positions", "rebalance_days", "holding_days"):
+    for key in ("max_positions", "rebalance_days"):
         v = _f(raw.get(key))
         if v is not None and v > 0:
             out[key] = int(v)
             used = True
+    v = _f(raw.get("holding_days"))
+    if v is not None and v >= 0:
+        out["holding_days"] = int(v)  # 0 = off
+        used = True
     # *_pct fields arrive in percent (8.0 = 8%); the sector cap as a fraction.
     for key in ("stop_loss_pct", "trailing_stop_pct"):
         v = _f(raw.get(key))
         if v is not None and v >= 0:
-            out[key] = v
+            out[key] = v  # 0 = off
             used = True
-    v = _sector_pct(raw.get("sector_limit"))
-    if v is not None and v > 0:
-        out["sector_limit"] = v
+    if "sector_limit" in raw and raw.get("sector_limit") is None and strategy.get("params"):
+        out["sector_limit"] = None  # no cap
         used = True
+    else:
+        v = _sector_pct(raw.get("sector_limit"))
+        if v is not None and v > 0:
+            out["sector_limit"] = v
+            used = True
     source = str(strategy.get("params_source") or "") if used else "default"
     return out, (source or "strategy")
+
+
+def gate_of(strategy: Optional[dict[str, Any]], picks: Optional["Picks"] = None) -> Optional[dict[str, Any]]:
+    """The strategy's market filter: the picks' copy (fresher) or the list's."""
+    if picks is not None and isinstance(picks.gate, dict):
+        return picks.gate
+    g = (strategy or {}).get("gate")
+    return g if isinstance(g, dict) else None
+
+
+def gate_title(gate: Optional[dict[str, Any]]) -> str:
+    """``K03: CASH since 2026-04-07`` (empty without a gate)."""
+    if not gate:
+        return ""
+    pos = "INVESTED" if gate.get("invested") else "CASH"
+    since = f" since {gate['since']}" if gate.get("since") else ""
+    return f"{gate.get('filter') or 'K03'}: {pos}{since}"
+
+
+_GAUGE_WORDS = {"rates": "interest rates", "funds": "fund discounts", "trend": "trend"}
+
+
+def gate_lines(gate: Optional[dict[str, Any]]) -> list[str]:
+    """Plain lines for the detail panel: the position and the three gauges."""
+    if not gate:
+        return []
+    when = f" (close of {gate['as_of']})" if gate.get("as_of") else ""
+    votes = gate.get("votes")
+    lines = [gate_title(gate) + when + (f" · {votes} of 3 gauges on, 2 needed for 5 sessions in a row"
+                                        if votes is not None else "")]
+    parts = []
+    for key, g in (gate.get("gauges") or {}).items():
+        label = _GAUGE_WORDS.get(key, key)
+        detail = g.get("detail") or {}
+        extra = ""
+        if key == "rates" and detail.get("rate") is not None and detail.get("mean_12m") is not None:
+            extra = f" {float(detail['rate']):.2f}% vs 12-month mean {float(detail['mean_12m']):.2f}%"
+        elif key == "funds" and g.get("value") is not None:
+            extra = f" {float(g['value']) * 100:+.2f} pts vs usual"
+        elif key == "trend" and g.get("value") is not None:
+            extra = f" {float(g['value']) * 100:+.1f}% vs 50-session mean"
+        parts.append(f"{label} {'ON' if g.get('on') else 'off'}{extra}")
+    if parts:
+        lines.append("Gauges: " + " · ".join(parts))
+    if gate.get("invested") and gate.get("selection_date"):
+        lines.append(f"Holding the selection made at the close of {gate['selection_date']}.")
+    elif not gate.get("invested"):
+        lines.append("Holds nothing while the filter says cash; auto-trade sells what it bought.")
+    if gate.get("stale"):
+        lines.append("Inputs stale on the website: " + "; ".join(str(x) for x in gate["stale"]))
+    return lines
 
 
 @dataclass
@@ -86,6 +153,8 @@ class Picks:
     note: str = ""
     fetched_at: float = 0.0
     error: str = ""
+    gate: Optional[dict[str, Any]] = None
+    selection_date: Optional[str] = None
 
 
 Request = Callable[..., dict]
@@ -172,10 +241,14 @@ class WebsiteStrategies:
                 rows=[dict(r) for r in (data.get("picks") or []) if r.get("symbol")],
                 note=str(data.get("note") or ""),
                 fetched_at=now,
+                gate=data.get("gate") if isinstance(data.get("gate"), dict) else None,
+                selection_date=data.get("selection_date"),
             )
         except Exception as exc:
             picks = Picks(strategy_id=strategy_id, fetched_at=now, error=str(exc),
-                          rows=list(cached.rows) if cached else [], as_of=cached.as_of if cached else None)
+                          rows=list(cached.rows) if cached else [], as_of=cached.as_of if cached else None,
+                          gate=cached.gate if cached else None,
+                          selection_date=cached.selection_date if cached else None)
         self._picks[strategy_id] = picks
         return picks
 
@@ -194,6 +267,7 @@ def describe(strategy: dict[str, Any]) -> list[str]:
         lines.append(str(strategy["summary"]))
     if strategy.get("description"):
         lines.append(str(strategy["description"]))
+    lines += gate_lines(strategy.get("gate"))
     bt = strategy.get("backtest") or {}
     if bt:
         parts = []
@@ -208,12 +282,27 @@ def describe(strategy: dict[str, Any]) -> list[str]:
                 parts.append(f"{label} {fmt.format(v)}")
         window = f"{bt.get('start')} → {bt.get('end')}" if bt.get("start") else ""
         lines.append("Backtest " + (f"{window}: " if window else "") + "  ".join(parts))
+        if bt.get("verdict"):
+            d = bt.get("design") or {}
+            alpha, t, bar = _f(bt.get("alpha_pct")), _f(bt.get("alpha_t")), _f(bt.get("bar_t"))
+            line = f"Research verdict {bt['verdict']}"
+            if alpha is not None and t is not None:
+                line += f": alpha {alpha:+.1f}%/yr, t {t:.2f}" + (f" (bar {bar:.2f})" if bar is not None else "")
+            if _f(d.get("alpha_pct")) is not None and _f(d.get("alpha_t")) is not None:
+                line += f"; design alpha {float(d['alpha_pct']):+.1f}%, t {float(d['alpha_t']):.2f}"
+            lines.append(line)
     else:
         lines.append("Not backtested yet on nepsequant.com.")
+    hold = f"sell after {params['holding_days']} days" if params["holding_days"] else "no holding limit"
+    stop = f"stop {params['stop_loss_pct']:.0f}%" if params["stop_loss_pct"] else "no stop-loss"
+    trail = f"trailing {params['trailing_stop_pct']:.0f}%" if params["trailing_stop_pct"] else "no trailing stop"
+    cap = f"sector cap {params['sector_limit']:.0f}%" if params["sector_limit"] is not None else "no sector cap"
     rules = (
         f"Hold up to {params['max_positions']} stocks · rebalance every {params['rebalance_days']} trading days · "
-        f"sell after {params['holding_days']} days · stop {params['stop_loss_pct']:.0f}% · "
-        f"trailing {params['trailing_stop_pct']:.0f}% · sector cap {params['sector_limit']:.0f}%"
+        f"{hold} · {stop} · {trail} · {cap}"
     )
-    lines.append(f"Trading rules ({'from its backtest' if source == 'backtest' else 'default' if source == 'default' else 'from the strategy'}): {rules}")
+    if strategy.get("gate") is not None or strategy.get("kind") == "research":
+        rules += " · only while its market filter says invested"
+    where = {"backtest": "from its backtest", "default": "default", "research": "from the research"}.get(source, "from the strategy")
+    lines.append(f"Trading rules ({where}): {rules}")
     return lines
