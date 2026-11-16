@@ -697,18 +697,18 @@ DataTable {
     background: #060b11;
     color: #d7dde5;
     scrollbar-size: 1 1;
-    scrollbar-background: #101114;
-    scrollbar-color: #24303c;
-    scrollbar-color-hover: #3b4b5d;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
+    scrollbar-color-hover: #5c5c5c;
     scrollbar-color-active: #f2b94b;
 }
 
 VerticalScroll,
 OptionList {
     scrollbar-size: 1 1;
-    scrollbar-background: #101114;
-    scrollbar-color: #24303c;
-    scrollbar-color-hover: #3b4b5d;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
+    scrollbar-color-hover: #5c5c5c;
     scrollbar-color-active: #f2b94b;
 }
 
@@ -835,12 +835,24 @@ DataTable > .datatable--odd-row {
 }
 
 #lookup-stats {
-    height: 8;
+    height: 9;
     width: 100%;
     padding: 0 1;
     background: #11151b;
     color: #d8e4f2;
     border-bottom: solid #4b5560;
+}
+
+#lookup-related-title {
+    height: 1;
+    background: #2a2213;
+    color: #f2b94b;
+    padding: 0 1;
+}
+
+#dt-lookup-related {
+    height: auto;
+    max-height: 14;
 }
 
 #lookup-report {
@@ -885,7 +897,7 @@ DataTable > .datatable--odd-row {
 }
 
 #lookup-intel-title {
-    height: 1;
+    height: 2;
     background: #2a2213;
     color: #f2b94b;
     padding: 0 1;
@@ -1021,8 +1033,8 @@ Button:focus {
     width: 100%;
     background: #07090c;
     scrollbar-size: 1 1;
-    scrollbar-background: #0b0f13;
-    scrollbar-color: #254e53;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
     padding: 0;
     margin: 0;
 }
@@ -1113,8 +1125,8 @@ Button:focus {
     border: none;
     padding: 0;
     scrollbar-size: 1 1;
-    scrollbar-background: #0b0f13;
-    scrollbar-color: #2f3c4a;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
 }
 
 #agent-detail {
@@ -1132,8 +1144,8 @@ Button:focus {
     padding: 0 1;
     border: none;
     scrollbar-size: 1 1;
-    scrollbar-background: #0b0f13;
-    scrollbar-color: #2f3c4a;
+    scrollbar-background: #0a0a0a;
+    scrollbar-color: #3a3a3a;
 }
 
 #agent-chat-footer {
@@ -1668,4 +1680,43 @@ ModalDialog {
     background: #15171a;
     color: #fff6de;
     border: none;
+}
+
+
+/* Linked to nepsequant.com: the website-strategy panel replaces the builder. */
+#webstrat-panel {
+    display: none;
+    height: 1fr;
+    padding: 0 1;
+}
+#webstrat-detail {
+    height: auto;
+    padding: 1 0;
+    color: #d7dde5;
+}
+#webstrat-actions {
+    height: auto;
+    margin: 0 0 1 0;
+}
+#webstrat-log {
+    height: 1fr;
+    color: #8a8a8a;
+}
+
+/* Every scrollbar grey (pure greys stay grey in 256-colour terminals such as
+   macOS Terminal; Textual's default is blue). Specific rules above still win. */
+* {
+    scrollbar-background: #0a0a0a;
+    scrollbar-background-hover: #0a0a0a;
+    scrollbar-background-active: #0a0a0a;
+    scrollbar-color: #3a3a3a;
+    scrollbar-color-hover: #5c5c5c;
+    scrollbar-color-active: #f2b94b;
+    scrollbar-corner-color: #0a0a0a;
+}
+
+/* The broker panel title must not take the whole header, or the
+   ALL / CIRCULAR / PUMP / SMART filter buttons beside it are pushed off. */
+#broker-floor-title {
+    width: 1fr;
 }

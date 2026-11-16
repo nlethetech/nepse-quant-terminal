@@ -329,6 +329,7 @@ from apps.tui.state.mixins.agent_chat import AgentChatMixin  # re-export
 from apps.tui.state.mixins.accounts_strategies import AccountsStrategiesMixin  # re-export
 from apps.tui.state.mixins.events_actions import EventsActionsMixin  # re-export
 from apps.tui.state.mixins.live_tms import LiveTMSMixin  # re-export
+from apps.tui.state.mixins.website_strategies_ui import WebsiteStrategiesMixin  # re-export
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -365,6 +366,7 @@ class NepseDashboard(
     AccountsStrategiesMixin,
     EventsActionsMixin,
     LiveTMSMixin,
+    WebsiteStrategiesMixin,
     App,
 ):
     CSS_PATH = Path(__file__).with_name("dashboard_tui.tcss")
@@ -406,6 +408,16 @@ class NepseDashboard(
     _last_tms_watchlist_fetch_at: float = 0.0
     _tms_watchlist_refresh_inflight: bool = False
     _trading_engine: Optional[TUITradingEngine] = None
+    # The nepsequant.com paper book, when the terminal is linked (./nqt-connect
+    # login): then it is the terminal's ONLY paper book (apps/tui/io/website_book.py).
+    _website_book = None
+    # Linked: the user's nepsequant.com strategies (apps/tui/io/website_strategies.py)
+    # and the auto-trader for the assigned one (apps/tui/io/strategy_autotrader.py).
+    _website_strategies = None
+    _autotrader = None
+    # Linked: the broker panels' floorsheet from nepsequant.com (apps/tui/io/website_floor.py).
+    _website_floor = None
+    _webstrat_index: int = 0
     _account_engines: dict = {}  # account_id -> TUITradingEngine
     _news_search_query: str = ""  # current news search filter
     _vector_search_results: list = []  # semantic search results from OSINT API
@@ -427,6 +439,10 @@ class NepseDashboard(
     _agent_chat_process: Optional[subprocess.Popen] = None
     _agent_chat_request_id: int = 0
     _agent_chat_stop_requested: bool = False
+    _agent_chat_busy: bool = False
+    _agent_analysis_running: bool = False
+    _agent_brief_running: bool = False
+    _agent_brief_skip_until: float = 0.0
     _screener_sort: str = "chg"  # screener sort column
     _screener_filter: str = ""   # screener sector filter
     _refresh_inflight: bool = False
@@ -517,6 +533,8 @@ class NepseDashboard(
                         yield DataTable(id="dt-lookup", zebra_stripes=True, cursor_type="row")
                     with VerticalScroll(id="lookup-summary-pane"):
                         yield Static("", id="lookup-stats")
+                        yield Static("", id="lookup-related-title")
+                        yield DataTable(id="dt-lookup-related", zebra_stripes=True, cursor_type="row")
                         yield Static("", id="lookup-report")
                     with VerticalScroll(id="lookup-side-pane"):
                         yield Static("", id="lookup-fin-title")
@@ -547,7 +565,7 @@ class NepseDashboard(
                             yield Static("COMPOSER", classes="panel-title", id="agent-compose-title")
                             with Vertical(id="agent-chat-footer"):
                                 yield Static("", id="agent-chat-hint")
-                                yield Input(id="agent-input", placeholder="Ask the agent...  (/agent list, /model gemma4:e2b, /stop)")
+                                yield Input(id="agent-input", placeholder="Ask the agent...  (/agent list, /agent openai, /model <name>, /stop)")
 
             # ── 6 ORDERS (Order Management) ──
             with Vertical(id="orders", classes="tab-pane"):
@@ -670,11 +688,20 @@ class NepseDashboard(
                     yield Static("", id="strategy-summary")
                     with Horizontal(id="strategies-split"):
                         with Vertical(id="strategies-left", classes="full-pane"):
-                            yield Static("SAVED STRATEGIES", classes="panel-title")
+                            yield Static("SAVED STRATEGIES", classes="panel-title", id="strategies-left-title")
                             yield DataTable(id="dt-strategy-list", zebra_stripes=True, cursor_type="row")
                             yield Static("", id="strategy-accounts-note")
                         with Vertical(id="strategies-right", classes="full-pane"):
-                            yield Static("STRATEGY BUILDER", classes="panel-title")
+                            yield Static("STRATEGY BUILDER", classes="panel-title", id="strategy-builder-title")
+                            # Linked to nepsequant.com: strategies come from the website (no builder)
+                            with Vertical(id="webstrat-panel"):
+                                yield Static("", id="webstrat-detail")
+                                with Horizontal(id="webstrat-actions", classes="strategy-row"):
+                                    yield Button("ASSIGN", id="webstrat-btn-assign", classes="profile-btn profile-btn-primary")
+                                    yield Button("AUTO OFF", id="webstrat-btn-auto", classes="profile-btn")
+                                    yield Button("REFRESH", id="webstrat-btn-refresh", classes="profile-btn")
+                                yield Static("AUTO-TRADE LOG", classes="panel-title")
+                                yield Static("", id="webstrat-log")
                             with Horizontal(id="strategy-name-row", classes="strategy-row"):
                                 yield Static("NAME", classes="profile-inline-label")
                                 yield Input(id="strategy-inp-name", placeholder="My Strategy", classes="profile-inline-input profile-name-input")

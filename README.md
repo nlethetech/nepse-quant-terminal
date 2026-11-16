@@ -2,7 +2,7 @@
 
 A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NEPSE), built with [Textual](https://textual.textualize.io/). Runs entirely in your terminal — no browser, no electron, no cloud dependency.
 
-**Paper trading only.** This terminal simulates trades locally and places no real orders. It can optionally [connect to your NEPSE Quant account](#connect-to-nepse-quant) to show your portfolios, read-only.
+**Paper trading only.** This terminal places no real orders. On its own it keeps a local paper book; [connected to your NEPSE Quant account](#connect-to-nepse-quant) it uses your nepsequant.com paper portfolio instead, so the terminal and the website share one paper book.
 
 **Prefer no setup?** The full web terminal is free at **[nepsequant.com](https://nepsequant.com)**: markets, broker flow, floorsheet, paper trading, risk and backtests.
 
@@ -14,20 +14,34 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 
 ## Connect to NEPSE Quant
 
-See your [nepsequant.com](https://nepsequant.com) paper and real portfolios from this terminal.
+[![Watch the demo: connect the NEPSE Quant Terminal to nepsequant.com](docs/media/nepse-quant-terminal-demo.png)](docs/media/nepse-quant-terminal-demo.mp4)
 
-1. Sign in at [nepsequant.com](https://nepsequant.com) and create a key under **Settings**.
+[▶ Watch the demo](docs/media/nepse-quant-terminal-demo.mp4) (one continuous take): create a key on nepsequant.com, connect the terminal, add an AI analyst, then Portfolio, Lookup, Orders, Signals, Strategies and Agents. *Recorded on a demo account: virtual money, back-dated example trades, not a track record.*
+
+Use your [nepsequant.com](https://nepsequant.com) paper portfolio as the terminal's paper book: one book on the website, your phone and this terminal.
+
+1. Sign in at [nepsequant.com](https://nepsequant.com) (free) and open **Settings → AI agents**. Type a name, tick **Paper trading** so the terminal can place paper orders, and press **Create key**. The key is shown once: copy it. (A key without Paper trading shows your book read-only.)
 2. From the repository folder:
 
 ```bash
 ./nqt-connect login     # paste the key; it stays hidden
-./nqt-connect paper     # your paper portfolio
-./nqt-connect real      # your real portfolio
-./nqt-connect status
-./nqt-connect logout
+./nqt-connect status    # which account, and whether the key can trade
+./nqt-connect paper     # your paper portfolio, as text
+./nqt-connect real      # your real portfolio (read-only)
+./nqt-connect logout    # back to the terminal's own local paper book
 ```
 
-The connection is read-only: it cannot place orders or change anything. The key is stored on your computer with owner-only permissions, is only sent to nepsequant.com over HTTPS, and can be revoked on the website at any time. The local paper account in this terminal stays separate from your website paper account.
+3. Optional: add an AI analyst with `./nqt-connect ai setup` (Ollama on your computer, or your own OpenAI or Claude key; see [AI Agent Setup](#ai-agent-setup)).
+4. Start the terminal: `python -m apps.tui.dashboard_tui`. While connected:
+
+- **Portfolio, Orders and Trades show your nepsequant.com paper book**, refreshed every 30 seconds.
+- **Orders you place go to the website's paper simulator**: leave the price empty for a market order, type a price for a limit order. The website applies its rules (NEPSE hours, Rs 0.10 ticks, price band, T+2, fees and capital gains tax), so a fill here is the same fill you see on the website.
+- **Lookup (key 4, or L) shows nepsequant.com's page for a stock**: a volume chart (green up days, red down days), a year of daily prices, key facts (market cap, P/E, P/B, ROE, yield, 52-week range), related stocks in the same sector (press Enter on one to open it), quarterly results, dividends and bonus, news and exchange filings, and the brokers who bought and sold most over the last 20 sessions. For `NEPSE` it shows the index and the day's movers.
+- **Strategies (key 0) are the ones you built on nepsequant.com**: Lab rule sets, signal blends and saved Screener screens. Assign one to see its picks on the Signals tab; **AUTO** lets the terminal trade it on your paper book while the terminal is open and NEPSE is trading (at most 8 orders a minute; it only sells what it bought). The local auto-trading engine and the agent's own auto-orders stay off while linked.
+- **The broker panels on the Signals tab (BROKER FLOOR and TOP BROKERS) use nepsequant.com's floorsheet**: the terminal downloads the latest day's trades (about 0.3 MB, at most every five minutes) and computes the panels itself, so you don't need to run the local floorsheet scraper. The panel title shows the day and which engine computed it (`rust` or `python`). These panels describe where trades were placed; a broker acts for many clients, so they are analytics, not trade signals.
+- **Virtual money only.** Nothing here can reach a broker.
+
+The key is stored on your computer with owner-only permissions, is only sent to nepsequant.com over HTTPS, and can be revoked on the website at any time. To keep the local paper book while a key is saved, start with `NQT_SHARED_BOOK=0`.
 
 ---
 
@@ -39,7 +53,7 @@ The connection is read-only: it cannot place orders or change anything. The key 
 - **Market Dashboard** — live quotes, 52-week highs/lows, top movers, sector heatmap, volume signals.
 - **Portfolio Analytics** — unrealized/realized P&L, sector concentration, holding age buckets, max drawdown, alpha vs. NEPSE benchmark.
 - **Gold Hedge Overlay** — tracks gold/silver regime (risk-on / neutral / risk-off) and adjusts capital deployment accordingly.
-- **AI Agent** — on-demand analysis of your portfolio positions and signal shortlist. Defaults to a local Ollama model, with Gemma 4 MLX or Claude CLI available as optional backends.
+- **AI Agent** — on-demand analysis of your portfolio positions and signal shortlist. Defaults to a local Ollama model; OpenAI or Claude on your own API key, Gemma 4 MLX or the Claude CLI are optional backends. When the terminal is linked to nepsequant.com it also reads NEPSE Quant's market briefing and news.
 - **Paper Agent Graph** — cleaned evidence-gated research, debate, risk, and portfolio decision workflow for paper execution only.
 - **Strategy Builder** — create, backtest, and assign custom strategies. Each account runs its own strategy independently.
 - **Statistical Validation** — walk-forward replay across rolling subwindows, Monte Carlo, CSCV/PBO overfitting detection, deflated Sharpe ratio, random baseline percentile. See [docs/VALIDATION_METHODOLOGY.md](docs/VALIDATION_METHODOLOGY.md) for what each test does and does not prove.
@@ -89,7 +103,7 @@ The public agent workflow is evidence-gated, checkpointed, and restricted to pap
 | Market Data | `backend/market/` | Price DB queries, quote scraping, 52wk calculations |
 | Validation | `validation/` | Walk-forward, Monte Carlo, CSCV, DSR, random baseline |
 | Gold Hedge | `backend/quant_pro/gold_hedge.py` | Gold/silver regime detection → capital deployment % |
-| AI Agent | `backend/agents/agent_analyst.py` | Ollama-first portfolio and signal analysis |
+| AI Agent | `backend/agents/agent_analyst.py` (+ `llm_ollama.py`, `llm_openai.py`, `llm_anthropic.py`, `nepse_briefing.py`) | Portfolio and signal analysis on Ollama, OpenAI or Claude |
 | Paper Agent Graph | `backend/nepse_agents/` | Evidence-gated research/debate/risk/portfolio workflow; paper-only |
 | NEPSE Calendar | `backend/quant_pro/nepse_calendar.py` | Trading-day week (Mon–Fri default), public holidays, trading day counter |
 
@@ -314,6 +328,16 @@ python scripts/ingestion/deterministic_daily_ingestion.py
 
 > The signal engine (volume breakout, momentum, quarterly fundamental, etc.) relies on recent price history. Stale data = stale signals. Set up a daily cron job or run the ingestion script manually each evening.
 
+### Optional: native speed-up for the broker panels
+
+The broker panels are computed in plain Python (numpy) by default. An optional Rust module computes the same numbers about five times faster; everything works without it. To build it you need [Rust](https://rustup.rs):
+
+```bash
+pip install maturin && maturin develop --release -m native/nqt_floor/Cargo.toml
+```
+
+It installs into the Python environment you run the terminal with. Set `NQT_FLOOR_ENGINE=python` to ignore it.
+
 ### Run
 
 ```bash
@@ -332,7 +356,33 @@ Paper strategy autopilot is broker-free. Manual orders and strategy orders use t
 
 ## AI Agent Setup
 
-The Agents tab provides on-demand equity analysis of your signal shortlist and portfolio. Ollama is the default backend; Gemma 4 MLX and Claude CLI are optional.
+The Agents tab provides on-demand equity analysis of your signal shortlist and portfolio. Ollama is the default backend; OpenAI, Claude (Anthropic API), Gemma 4 MLX and the Claude CLI are optional.
+
+### AI analyst: Ollama, OpenAI or Claude
+
+Pick the AI once, from the repository folder:
+
+```bash
+./nqt-connect ai setup     # choose ollama, openai or anthropic; paste the key (hidden); Enter keeps the default model
+./nqt-connect ai status    # provider, model, and whether a key is saved (the key itself is never shown)
+./nqt-connect ai off       # delete saved keys and go back to local Ollama
+```
+
+| Provider | Default model | Cost | Needs |
+|---|---|---|---|
+| `ollama` | `llama3` (uses an installed model if that one is missing) | free, runs on your computer | [Ollama](https://ollama.com) and `ollama pull llama3.2` |
+| `openai` | `gpt-5-mini` | billed to your OpenAI key | an OpenAI API key |
+| `anthropic` | `claude-opus-5-5` (low-cost: `claude-haiku-5-5`) | billed to your Anthropic key | an Anthropic API key and `pip install anthropic` |
+
+Switch any time in the Agents tab (key 5): `/agent openai`, `/agent anthropic claude-haiku-5-5`, `/agent ollama llama3.2`, or `/model <name>` for the current provider. The header shows what is answering, e.g. `CLAUDE · claude-opus-5-5`.
+
+- **Costs are on your own key.** Each chat answer and each picks analysis is one request to your provider. The terminal keeps requests small (last few chat turns only, trimmed context, capped answer length, cached system prompt) and reuses a fresh analysis instead of re-running it.
+- **Keys stay on your computer**, in `~/.config/nepse-quant-terminal/ai.json` (owner-only permissions), and are sent only to the provider they belong to. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` environment variables take priority. Never paste a key into the chat box: the terminal refuses anything that looks like a key, because chat history is saved to disk.
+- **NEPSE Quant data:** when the terminal is linked (`./nqt-connect login`), the analyst also reads your account's market briefing from nepsequant.com (market phase, NEPSE close, regime, breadth, top movers, latest news with sources, disclosures), refreshed every five minutes, and can cite it. Not linked or offline: it simply works without it.
+- **It knows your context.** Every answer sees your watchlist (the terminal's, plus your nepsequant.com watchlist when linked), the holdings and recent trades of the paper book in use, and your assigned strategy with today's picks. "Research my watchlist" just works; it never asks for tickers it already has.
+- **It can look things up while it answers** (OpenAI, Claude, and Ollama models with tool calling): price and key-facts snapshot for up to 20 names, up to 120 sessions of price history, a company's news and filings, the day's movers with the news behind them, and your own watchlist, holdings and trades. Read-only (nothing can place an order), at most 6 lookups per answer; linked, the lookups come from nepsequant.com, otherwise from your local market database. Models without tool calling get the same data fetched up front. `NQT_AGENT_TOOLS=0` turns lookups off.
+- **Automatic briefs.** With a provider set up, the analyst posts a short brief into the chat once a day, and on trading days at pre-open (10:30), mid-session (13:00) and after the close (15:15 NPT): what moved in your names and why, stocks that moved on news and how they may react, and a few names worth researching from your own history. One model call per brief, never repeated for the same window. `/brief` runs one now; `/proactive off` (or `NQT_AGENT_PROACTIVE=0`) stops the automatic ones.
+- Same rules everywhere: paper trading only, the same analyst rules and verdict format, and the trade-approval veto. `OPENAI_BASE_URL` points `openai` at any OpenAI-compatible server; `OLLAMA_HOST` points `ollama` at another machine.
 
 ### Option 1 — Ollama (recommended, any hardware)
 
@@ -449,15 +499,19 @@ Then set `active_agent.json` backend to `"claude"`, or switch from the TUI:
 
 ### Switching backends at runtime
 
-All three backends are hot-swappable without restarting the terminal. In the Agents tab chat box:
+All backends are hot-swappable without restarting the terminal. In the Agents tab chat box:
 
 ```text
 /agent
 /agent list
 /agent ollama gemma4:e2b
+/agent openai gpt-5-mini
+/agent anthropic claude-opus-5-5
 /agent gemma4_mlx
 /agent claude
 /model qwen2
+/brief            # a brief now: your names, news-linked movers, names worth researching
+/proactive off    # stop the automatic briefs (/proactive on to restart)
 ```
 
 The setting persists to `data/runtime/agents/active_agent.json`.

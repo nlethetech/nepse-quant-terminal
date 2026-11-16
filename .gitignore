@@ -64,3 +64,6 @@ node_modules/
 
 # Local signing keys and issued licences
 secrets/
+
+# === Native (Rust) build output ===
+native/*/target/

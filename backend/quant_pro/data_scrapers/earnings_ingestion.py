@@ -16,10 +16,8 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sqlite3
 import sys
-from pathlib import Path
 
 from backend.quant_pro.paths import get_project_root
 
@@ -37,8 +35,8 @@ from backend.quant_pro.earnings_scraper import (
 
 
 def _get_db_path() -> str:
-    raw = os.environ.get("NEPSE_DB_FILE", "nepse_market_data.db")
-    return str(Path(raw).resolve())
+    from backend.quant_pro.database import get_db_path
+    return str(get_db_path())
 
 
 def show_summary(db_path: str) -> None:
@@ -139,7 +137,7 @@ def main():
     )
     parser.add_argument(
         "--db", default=None,
-        help="Database path (default: nepse_market_data.db)",
+        help="Database path (default: NEPSE_DB_FILE or data/nepse_market_data.db)",
     )
     parser.add_argument(
         "--summary", action="store_true",

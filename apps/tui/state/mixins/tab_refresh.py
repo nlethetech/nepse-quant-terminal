@@ -32,6 +32,7 @@ import pandas as pd
 from rich.text import Text
 from textual import work
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import Button, DataTable, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
@@ -54,17 +55,30 @@ from apps.tui.render.cells import (
     _truncate_text,
     _vol_text,
 )
+from apps.tui.io.floor_metrics import local_floor_records
+from apps.tui.render.broker_floor import (
+    BROKER_COLS,
+    TOP_BROKER_COLS,
+    floor_signal_rows,
+    floor_title,
+    message_row,
+    top_broker_rows as top_broker_rows_for,
+    website_floor_panels,
+)
 from apps.tui.render.text_blocks import (
     _headline_fallback_from_url,
     _render_lookup_intelligence,
     _render_stock_report,
 )
-from apps.tui.render.charts import _render_candlestick_chart, _render_sparkline
+from apps.tui.render.charts import _render_candlestick_chart, _render_sparkline  # noqa: F401 (re-export seam)
+from apps.tui.render.lookup_page import build_payload as _lookup_web_payload
+from apps.tui.render.volume_chart import render_volume_chart as _render_volume_chart
 from apps.tui.io.stats import (
     _compute_account_portfolio_stats,
     _compute_portfolio_stats,
     _get_regime,
     _signal_label,
+    _stats_from_frames,
 )
 from apps.tui.io.intraday import (
     _ensure_lookup_history,
@@ -240,7 +254,10 @@ class TabRefreshMixin:
             else:
                 styled.append(ch, style="#888888")
             i += 1
-        self.query_one("#ticker-bar", Static).update(styled)
+        try:
+            self.query_one("#ticker-bar", Static).update(styled)
+        except NoMatches:  # the terminal is closing
+            return
         self._ticker_offset += 1
     @staticmethod
     def _upsert_live_prices(snap) -> None:
@@ -369,6 +386,9 @@ class TabRefreshMixin:
                 pass
 
             self.md.refresh()
+            if self._website_book is not None:
+                self._website_book.refresh()  # the shared nepsequant.com paper book
+                self._run_autotrader_pass()  # the assigned strategy, when auto-trade is on
             from apps.tui.dashboard_tui import _fetch_osint_stories
             self._osint_stories = _fetch_osint_stories(80)
 
@@ -397,6 +417,15 @@ class TabRefreshMixin:
         self.call_from_thread(self._update_index)
     @work(thread=True)
     def _load_signals_async(self, force: bool = False) -> None:
+        strategies = self._website_strategies
+        if strategies is not None:
+            # Linked: the assigned nepsequant.com strategy's picks for today.
+            if not strategies.loaded:
+                strategies.refresh()
+            if strategies.assigned:
+                strategies.picks(strategies.assigned, force=force)
+            self.call_from_thread(self._render_website_signals)
+            return
         cache_key = self._signals_cache_key()
         if (
             not force
@@ -1082,7 +1111,19 @@ class TabRefreshMixin:
             [("SYMBOL", "sym"), ("LTP", "ltp"), ("CHG%", "chg"), ("VOL", "vol")],
             quote_rows)
     def _populate_portfolio_and_risk(self):
-        if self._trading_engine or self.trade_mode == "paper":
+        book = self._website_book
+        if book is not None and self.trade_mode == "paper":
+            # Linked to nepsequant.com: the website's paper book is the book.
+            self._stats = _stats_from_frames(
+                self.md,
+                book.portfolio_frame(),
+                book.nav_frame(),
+                book.trade_log_frame(),
+                account_capital=book.starting_cash(),
+                cash=book.cash(),
+                prefer_book_price=True,
+            )
+        elif self._trading_engine or self.trade_mode == "paper":
             # Always use account-specific paper_portfolio.csv as the authoritative view.
             # This captures both manual trades and any engine trades persisted there.
             # The engine's tui_paper_portfolio.csv is used only as a fallback.
@@ -1426,6 +1467,9 @@ class TabRefreshMixin:
         except Exception:
             pass
     def _populate_strategies_tab(self) -> None:
+        if self._website_strategies is not None:
+            self._populate_website_strategies_tab()
+            return
         if not getattr(self, "_strategies", None):
             self._load_strategies_registry()
         self._populate_strategy_list()
@@ -1483,6 +1527,13 @@ class TabRefreshMixin:
             trade_log = pd.read_csv(trade_log_path) if trade_log_path.exists() else pd.DataFrame(columns=TRADE_LOG_COLS)
             nav_log = pd.read_csv(nav_log_path) if nav_log_path.exists() else pd.DataFrame(columns=NAV_LOG_COLS)
             state = load_runtime_state(str(state_path))
+        elif self._website_book is not None:
+            # linked: the account panel describes the shared nepsequant.com book
+            book = self._website_book
+            portfolio = book.portfolio_frame()
+            nav_log = book.nav_frame()
+            trade_log = book.trade_log_frame()
+            state = {"cash": book.cash()}
         else:
             portfolio = load_port()
             nav_log = _load_nav_log()
@@ -1741,6 +1792,7 @@ class TabRefreshMixin:
         if not s["winners"] and not s["losers"]:
             dt2.add_row(_dim_text("—"), _dim_text("No positions"), *[Text("")] * 3)
     def _populate_signals_workspace(self, force: bool = False) -> None:
+        self._maybe_refresh_website_floor()
         cache_key = self._data_version()
         if (
             not force
@@ -1977,131 +2029,37 @@ class TabRefreshMixin:
                     conn.close()
 
             # ── Broker floor signals ─────────────────────────────────────────
-            # (label, key, width) — explicit widths for perfect alignment
-            broker_cols = [
-                ("SYMBOL",   "bsym",    8),
-                ("SIGNAL",   "btype",  14),
-                ("BUY HHI",  "bhhi_b",  8),
-                ("SLR HHI",  "bhhi_s",  8),
-                ("CIRC",     "bcirc",   6),
-                ("SELF%",    "bself",   6),
-                ("SM SCORE", "bscore",  9),
-                ("TRADES",   "btr",     7),
-            ]
+            broker_cols = BROKER_COLS
             broker_rows: list[list[Text]] = []
             top_broker_cols: list = []
             top_broker_rows: list[list[Text]] = []
-            broker_title = "BROKER FLOOR SIGNALS — python3 -m backend.quant_pro.data_scrapers.floorsheet_ingestion"
-            try:
-                import sqlite3 as _sqlite3
-                from backend.quant_pro.database import get_db_path as _get_db_path
-                _bconn = _sqlite3.connect(str(_get_db_path()))
-                _bconn.row_factory = _sqlite3.Row
-                # Check if broker_signals_v2 table has any data
+            website_floor = getattr(self, "_website_floor", None)
+            if website_floor is not None:
+                # Linked: computed from nepsequant.com's floorsheet (no network here;
+                # _refresh_website_floor downloads it in its own worker).
+                broker_title, broker_rows, top_broker_cols, top_broker_rows = website_floor_panels(
+                    website_floor.view, website_floor.error
+                )
+            else:
+                broker_title = "BROKER FLOOR SIGNALS — python3 -m backend.quant_pro.data_scrapers.floorsheet_ingestion"
                 try:
-                    _latest_bdate = (_bconn.execute(
-                        "SELECT MAX(as_of_date) FROM broker_signals_v2"
-                    ).fetchone() or [None])[0]
-                except Exception:
-                    _latest_bdate = None
-                if _latest_bdate:
-                    _brows = _bconn.execute("""
-                        SELECT b.symbol,
-                               b.hhi_buy, b.hhi_sell,
-                               b.circular_score, b.pump_score,
-                               COALESCE(b.self_trade_pct, b.pump_score) AS self_trade_pct,
-                               b.smart_money_score, b.n_trades,
-                               m.micro_score
-                        FROM broker_signals_v2 b
-                        LEFT JOIN broker_microstructure m
-                          ON b.symbol = m.symbol AND m.as_of_date = b.as_of_date
-                        WHERE b.as_of_date = ?
-                          AND (b.circular_score > 0.15 OR b.pump_score > 0.05 OR b.smart_money_score > 0.08)
-                        ORDER BY
-                            CASE WHEN b.circular_score > 0.15 OR b.pump_score > 0.05 THEN 0 ELSE 1 END ASC,
-                            b.circular_score DESC,
-                            b.smart_money_score DESC
-                        LIMIT 60
-                    """, (_latest_bdate,)).fetchall()
-                    n_circ = sum(1 for _r in _brows if float(_r["circular_score"] or 0) > 0.15)
-                    n_sm   = sum(1 for _r in _brows if float(_r["smart_money_score"] or 0) > 0.08)
-                    broker_title = (
-                        f"BROKER FLOOR  {_latest_bdate}  |"
-                        f"  {n_circ} circular/pump  ·  {n_sm} smart money  ·  {len(_brows)} total"
-                    )
-                    for _r in _brows:
-                        circ  = float(_r["circular_score"]  or 0.0)
-                        self_ = float(_r["self_trade_pct"]  or 0.0)  # self-trade fraction
-                        pump  = float(_r["pump_score"]       or 0.0)  # composite pump score
-                        sm    = float(_r["smart_money_score"] or 0.0)
-                        hhi_b = float(_r["hhi_buy"]          or 0.0)
-                        hhi_s = float(_r["hhi_sell"]         or 0.0)
-                        trades = int(_r["n_trades"]          or 0)
-                        # Microstructure-adjusted score
-                        _ms = _r["micro_score"]
-                        micro = float(_ms) if _ms is not None else 0.5
-                        display_score = sm * (0.5 + 0.5 * micro)
-                        # Signal classification — self_ is now direct self-trade evidence
-                        if self_ > 0.20 and circ > 0.15:
-                            sig_label, sig_style = "[!] WASH+SELF ", f"bold {LOSS_HI}"
-                        elif self_ > 0.10:
-                            sig_label, sig_style = "[!] SELF-TRADE", LOSS_HI
-                        elif circ > 0.15:
-                            sig_label, sig_style = "[!] CIRCULAR  ", LOSS_HI
-                        elif display_score > 0.25:
-                            sig_label, sig_style = "[+] SMART $   ", f"bold {GAIN_HI}"
-                        else:
-                            sig_label, sig_style = "[~] ACCUM     ", GAIN_HI
-                        broker_rows.append([
-                            _sym_text(str(_r["symbol"])),
-                            Text(sig_label, style=sig_style),
-                            Text(f"{hhi_b:5.2f}", style=GAIN_HI if hhi_b > 0.30 else WHITE),
-                            Text(f"{hhi_s:5.2f}", style=LOSS_HI if hhi_s > 0.20 else GAIN_HI),
-                            Text(f"{circ*100:4.0f}%", style=LOSS_HI if circ > 0.15 else WHITE),
-                            Text(f"{self_*100:4.0f}%", style=LOSS_HI if self_ > 0.10 else WHITE),
-                            Text(f"{display_score:7.3f}" if display_score > 0 else "      —",
-                                 style=GAIN_HI if display_score > 0.15 else WHITE),
-                            _dim_text(f"{trades:6d}"),
-                        ])
-                    top_broker_cols = [
-                        ("BROKER", "tbroker", 8),
-                        ("BUY QTY", "tbuy", 10),
-                        ("SELL QTY", "tsell", 10),
-                        ("NET QTY", "tnet", 10),
-                        ("TRADES", "ttrades", 8),
-                    ]
-                    try:
-                        _top_rows = _bconn.execute("""
-                            SELECT broker_code,
-                                   SUM(buy_qty) AS buy_qty,
-                                   SUM(sell_qty) AS sell_qty,
-                                   SUM(net_qty) AS net_qty,
-                                   SUM(total_trades) AS total_trades
-                            FROM broker_summary
-                            WHERE as_of_date = ?
-                            GROUP BY broker_code
-                            ORDER BY ABS(SUM(net_qty)) DESC, SUM(total_trades) DESC
-                            LIMIT 25
-                        """, (_latest_bdate,)).fetchall()
-                    except Exception:
-                        _top_rows = []
-                    for _r in _top_rows:
-                        net_qty = int(_r["net_qty"] or 0)
-                        net_style = GAIN_HI if net_qty > 0 else (LOSS_HI if net_qty < 0 else DIM)
-                        top_broker_rows.append([
-                            Text(str(_r["broker_code"]), style=WHITE),
-                            _vol_text(int(_r["buy_qty"] or 0)),
-                            _vol_text(int(_r["sell_qty"] or 0)),
-                            Text(f"{net_qty:,}", style=net_style),
-                            _dim_text(f"{int(_r['total_trades'] or 0):,}"),
-                        ])
-                else:
-                    broker_rows.append([_dim_text("—"), _dim_text("Run floorsheet ingestion to populate broker data"), *[Text("")] * 6])
-                _bconn.close()
-            except Exception as _be:
-                broker_rows.append([_dim_text("—"), _dim_text("Run floorsheet scraper to populate broker data"), *[Text("")] * 6])
-                top_broker_cols = []
-                top_broker_rows = []
+                    import sqlite3 as _sqlite3
+                    from backend.quant_pro.database import get_db_path as _get_db_path
+                    _bconn = _sqlite3.connect(str(_get_db_path()))
+                    _bconn.row_factory = _sqlite3.Row
+                    _latest_bdate, _brows, _top_rows = local_floor_records(_bconn)
+                    if _latest_bdate:
+                        broker_title = floor_title(_latest_bdate, _brows)
+                        broker_rows = floor_signal_rows(_brows)
+                        top_broker_cols = TOP_BROKER_COLS
+                        top_broker_rows = top_broker_rows_for(_top_rows)
+                    else:
+                        broker_rows.append(message_row("Run floorsheet ingestion to populate broker data"))
+                    _bconn.close()
+                except Exception as _be:
+                    broker_rows.append(message_row("Run floorsheet scraper to populate broker data"))
+                    top_broker_cols = []
+                    top_broker_rows = []
 
             payload = {
                 "calendar_cols": calendar_cols,
@@ -2142,6 +2100,13 @@ class TabRefreshMixin:
         self.query_one("#screener-status-bar", Static).update(Text.from_markup(payload["status_markup"]))
         self.query_one("#screener-list-title", Static).update(payload["list_title"])
 
+        self._render_broker_panels(payload)
+
+    def _render_broker_panels(self, payload: dict) -> None:
+        if getattr(self, "_website_floor", None) is not None:
+            # Linked: always the newest nepsequant.com floorsheet the terminal holds.
+            payload.update(self._website_floor_payload())
+        self._signals_workspace_cache_payload = payload
         try:
             dt_broker = self.query_one("#dt-broker-floor", DataTable)
             dt_broker.clear(columns=True)
@@ -2166,10 +2131,39 @@ class TabRefreshMixin:
             broker_title = payload.get("broker_title") or ""
             date_part = broker_title.split("|")[0].replace("BROKER FLOOR", "").strip() if "|" in broker_title else ""
             self.query_one("#broker-top-title", Static).update(
-                f"TOP BROKERS BY VOLUME{('  ' + date_part) if date_part else ''}"
+                f"TOP BROKERS BY NET QTY{('  ' + date_part) if date_part else ''}"
             )
         except Exception:
             pass
+    # ── broker panels from nepsequant.com (linked terminals) ────────────────
+    def _website_floor_payload(self) -> dict:
+        floor = self._website_floor
+        title, rows, top_cols, top_rows = website_floor_panels(floor.view, floor.error)
+        return {
+            "broker_cols": BROKER_COLS,
+            "broker_rows": rows,
+            "broker_title": title,
+            "top_broker_cols": top_cols,
+            "top_broker_rows": top_rows,
+        }
+
+    def _maybe_refresh_website_floor(self) -> None:
+        floor = getattr(self, "_website_floor", None)
+        if floor is not None and floor.due():
+            self._refresh_website_floor()
+
+    @work(thread=True, group="website-floor")
+    def _refresh_website_floor(self, force: bool = False) -> None:
+        """Download + compute in this worker; the UI thread only re-renders."""
+        floor = getattr(self, "_website_floor", None)
+        if floor is not None and floor.refresh(force=force):
+            self.call_from_thread(self._apply_website_floor)
+
+    def _apply_website_floor(self) -> None:
+        payload = getattr(self, "_signals_workspace_cache_payload", None)
+        if payload is not None:  # else the workspace render picks it up
+            self._render_broker_panels(payload)
+
     def _apply_broker_floor_filter(self) -> None:
         """Re-populate broker floor table from cached payload using current filter."""
         payload = getattr(self, "_signals_workspace_cache_payload", None) or {}
@@ -2364,12 +2358,14 @@ class TabRefreshMixin:
             dt.add_column(label, key=key)
         # Merge all trade log sources for the current account: engine (auto), paper (manual), tui (engine csv)
         _tl_sources: list[pd.DataFrame] = []
-        if self._trading_engine:
+        if self._website_book is not None:
+            _tl_sources.append(self._website_book.trade_log_frame())
+        elif self._trading_engine:
             _etl = self._trading_engine.get_trade_log()
             if not _etl.empty:
                 _tl_sources.append(_etl)
         _acc_tl_dir = _account_dir(self._current_account_id)
-        for _fname in ("paper_trade_log.csv", "tui_paper_trade_log.csv"):
+        for _fname in (() if self._website_book is not None else ("paper_trade_log.csv", "tui_paper_trade_log.csv")):
             _tl_path = _acc_tl_dir / _fname
             if _tl_path.exists():
                 try:
@@ -2378,7 +2374,9 @@ class TabRefreshMixin:
                         _tl_sources.append(_df)
                 except Exception:
                     pass
-        if _tl_sources:
+        if self._website_book is not None:
+            tl = _tl_sources[0]
+        elif _tl_sources:
             tl = pd.concat(_tl_sources, ignore_index=True)
             _dedup_keys = [c for c in ("Date", "Action", "Symbol", "Shares", "Price") if c in tl.columns]
             if _dedup_keys:
@@ -2444,7 +2442,10 @@ class TabRefreshMixin:
         if not sym:
             return
         tf = self.lookup_tf
-        cache_key = (sym, tf, self._data_version())
+        version = self._data_version()
+        if getattr(self, "_website_lookup", None) is not None and tf != "I":
+            version = f"web-{int(time.time() // 300)}"  # nepsequant.com's page, refreshed every 5 minutes
+        cache_key = (sym, tf, version)
         self._lookup_request_key = cache_key
         if cache_key in self._lookup_cache:
             self._render_lookup_payload(cache_key, self._lookup_cache[cache_key])
@@ -2468,7 +2469,8 @@ class TabRefreshMixin:
         self.query_one("#lookup-intel", Static).update(Text("  Loading intelligence...", style=LABEL))
         self.query_one("#lookup-fin-title", Static).update(f"QUARTERLY FINANCIALS — {sym}")
         self.query_one("#lookup-ca-title", Static).update(f"CORPORATE ACTIONS — {sym}")
-        for table_id in ("#dt-lookup", "#dt-lookup-fin", "#dt-lookup-ca"):
+        self.query_one("#lookup-related-title", Static).update("")
+        for table_id in ("#dt-lookup", "#dt-lookup-fin", "#dt-lookup-ca", "#dt-lookup-related"):
             self.query_one(table_id, DataTable).clear(columns=True)
     @work(thread=True)
     def _load_lookup_async(
@@ -2480,6 +2482,25 @@ class TabRefreshMixin:
         pane_height: int,
     ) -> None:
         cache_key = (sym, tf, data_version)
+        web = getattr(self, "_website_lookup", None)
+        web_note = ""
+        if web is not None and tf != "I":
+            from apps.cli import connect
+
+            try:
+                data = web.get(sym, timeframe=tf)
+                payload = _lookup_web_payload(sym, tf, data, width=max(60, pane_width - 2),
+                                              height=max(10, pane_height - 1))
+                self.call_from_thread(self._render_lookup_payload, cache_key, payload)
+                return
+            except connect.ConnectError as exc:
+                if "not a listed" in str(exc) or "No price history" in str(exc):
+                    self.call_from_thread(self._render_lookup_payload, cache_key,
+                                          {"found": False, "sym": sym, "error": str(exc)})
+                    return
+                web_note = f"  (nepsequant.com: {str(exc)[:80]} — showing this computer's data)"
+            except Exception as exc:  # a malformed reply: fall back to local data
+                web_note = f"  (nepsequant.com page unreadable: {str(exc)[:60]} — showing this computer's data)"
         try:
             min_sessions = 2 if tf in {"D", "I"} else {"W": 10, "M": 18, "Y": 24}.get(tf, 2)
             _ensure_lookup_history(sym, min_sessions=min_sessions)
@@ -2531,7 +2552,7 @@ class TabRefreshMixin:
             title = (
                 f"LOOKUP: {sym}  —  {tf_labels.get(tf, 'Daily')}  "
                 f"({n_sessions} {count_label})  —  "
-                f"D/W/M/Y/I to switch  —  Press L to change{intraday_note}"
+                f"D/W/M/Y/I to switch  —  Press L to change{intraday_note}{web_note}"
             )
             header = Text.assemble(
                 (f"  {sym}  ", f"bold {CYAN}"),
@@ -2543,10 +2564,14 @@ class TabRefreshMixin:
 
             try:
                 chart_rows = _resample_ohlcv(chart_source, tf).sort_values("date").reset_index(drop=True)
-                ideal_width = 18 + max(12, len(chart_rows)) * 3
-                cw = max(60, min(pane_width - 2, ideal_width))
-                ch_h = max(12, pane_height - 1)
-                chart = _render_candlestick_chart(chart_source, width=cw, height=ch_h, timeframe=tf)
+                chart = _render_volume_chart(
+                    [str(d)[:16 if tf == "I" else 10] for d in chart_rows["date"]],
+                    [float(x) for x in chart_rows["close"]],
+                    [float(x or 0) for x in chart_rows["volume"]],
+                    width=max(60, pane_width - 2), height=max(10, pane_height - 1),
+                    unit="rupees" if sym == "NEPSE" or sym.startswith("NEPSE_") else "shares",
+                    label="bars" if tf == "I" else "sessions" if tf == "D" else {"W": "weeks", "M": "months", "Y": "years"}.get(tf, "sessions"),
+                )
             except Exception as e:
                 chart = Text(f"  Chart error: {e}", style=LABEL)
 
@@ -2609,8 +2634,12 @@ class TabRefreshMixin:
                 fin_cols = [("STATUS", "status")]
                 fin_rows = [[_dim_text("Financial report unavailable")]]
 
-            intel_title = f"CORPORATE INTELLIGENCE — {sym}"
-            intel = _render_lookup_intelligence(fin_report, sym)
+            intel_title = "MORE FROM NEPSEQUANT.COM"
+            intel = Text(
+                "  Link this terminal to nepsequant.com to see related stocks, quarterly results,\n"
+                "  news, exchange filings and broker flow here:  ./nqt-connect login",
+                style=LABEL,
+            )
 
             tf_col_label = {"D": "DATE", "W": "WEEK", "M": "MONTH", "Y": "YEAR", "I": "TIME"}
             ohlcv_title = f"OHLCV — {sym} ({tf_labels.get(tf, 'Daily')})"
@@ -2708,6 +2737,12 @@ class TabRefreshMixin:
 
         if not payload.get("found"):
             sym = payload.get("sym", self.lookup_sym)
+            try:
+                self.query_one("#lookup-related-title", Static).update("")
+                self.query_one("#dt-lookup-related", DataTable).clear(columns=True)
+                self._lookup_related_syms = []
+            except Exception:
+                pass
             title_w.update(f"LOOKUP: {sym} — NOT FOUND")
             header_w.update("")
             chart_w.update("")
@@ -2721,6 +2756,18 @@ class TabRefreshMixin:
             intel_title.update("")
             intel_w.update("")
             return
+
+        rel_title = self.query_one("#lookup-related-title", Static)
+        rel_dt = self.query_one("#dt-lookup-related", DataTable)
+        rel_dt.clear(columns=True)
+        rel_title.update(payload.get("related_title") or "")
+        rel_dt.display = bool(payload.get("related_rows"))
+        rel_title.display = bool(payload.get("related_title"))
+        self._lookup_related_syms = list(payload.get("related_syms") or [])
+        for label, key in payload.get("related_cols") or []:
+            rel_dt.add_column(label, key=key)
+        for row in payload.get("related_rows") or []:
+            rel_dt.add_row(*row)
 
         title_w.update(payload["title"])
         header_w.update(payload["header"])
@@ -2745,6 +2792,8 @@ class TabRefreshMixin:
             fin_dt.add_row(*row)
 
         ca_title.update(payload["ca_title"])
+        ca_title.display = bool(payload["ca_title"])
+        intel_title.display = bool(payload["intel_title"])
         ca_dt.clear(columns=True)
         if payload["ca_rows"]:
             for label, key in payload["ca_cols"]:

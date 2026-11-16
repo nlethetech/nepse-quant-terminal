@@ -15,7 +15,9 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from rich.markup import escape as _escape
 from rich.text import Text
+from textual import work
 from textual.widgets import Button, DataTable, Input, Static
 
 from apps.tui.screens.dialog import ModalDialog
@@ -28,6 +30,7 @@ from apps.tui.io.orders_io import (
     _paper_filled_orders_for_day,
     _resolve_sell_qty,
 )
+from apps.tui.io.website_book import describe_result
 from apps.tui.io.persistence import (
     _account_dir,
     _account_initial_capital_from_files,
@@ -55,11 +58,14 @@ class OrderBookMixin:
             self._set_status(f"Order: Invalid buy quantity for {result['symbol']}")
             return
         price = self._resolve_ticket_price(result["symbol"], result.get("price", ""))
+        if price is None and self._website_book is not None and not str(result.get("price", "") or "").strip():
+            price = 0.0  # a market order: the website prices it
         if price is None:
             self._set_status(f"Order: No price available for {result['symbol']}")
             return
         slippage = self._parse_slippage(result.get("slippage", ""))
-        msg = self._submit_paper_order("BUY", result["symbol"], qty, price, slippage)
+        market = not str(result.get("price", "") or "").strip()
+        msg = self._submit_paper_order("BUY", result["symbol"], qty, price, slippage, market=market)
         self._set_status(f"{msg}  |  Agent: {reason[:60]}")
         self.action_tab("orders")
 
@@ -77,16 +83,28 @@ class OrderBookMixin:
             self._set_status(f"Order: {exc}")
             return
         price = self._resolve_ticket_price(result["symbol"], result.get("price", ""))
+        if price is None and self._website_book is not None and not str(result.get("price", "") or "").strip():
+            price = 0.0  # a market order: the website prices it
         if price is None:
             self._set_status(f"Order: No price available for {result['symbol']}")
             return
         slippage = self._parse_slippage(result.get("slippage", ""))
-        msg = self._submit_paper_order("SELL", result["symbol"], qty, price, slippage)
+        market = not str(result.get("price", "") or "").strip()
+        msg = self._submit_paper_order("SELL", result["symbol"], qty, price, slippage, market=market)
         self._set_status(f"{msg}  |  Agent: {reason[:60]}")
         self.action_tab("orders")
 
     def _load_paper_orders(self) -> None:
-        """Load paper orders from JSON files."""
+        """Load paper orders from JSON files (or the linked website book)."""
+        book = self._website_book
+        if book is not None:
+            from backend.trading.live_trader import now_nst
+            self._paper_orders, self._paper_order_history = book.order_records()
+            self._paper_trades_today = _paper_filled_orders_for_day(
+                self._paper_order_history,
+                now_nst().strftime("%Y-%m-%d"),
+            )
+            return
         account_id = str(getattr(self, "__dict__", {}).get("_current_account_id", "") or "").strip()
         if account_id:
             account_dir = _account_dir(account_id)
@@ -171,6 +189,8 @@ class OrderBookMixin:
         return any(str(value)[:10] == today for value in entry_dates.tolist())
 
     def _paper_same_day_trade_block(self, action: str, symbol: str) -> Optional[str]:
+        if self._website_book is not None:
+            return None  # the website applies NEPSE's same-day rule to the shared book
         sym = str(symbol or "").strip().upper()
         act = str(action or "").strip().upper()
         if act == "BUY" and self._paper_has_same_day_order(sym, action="SELL"):
@@ -180,8 +200,25 @@ class OrderBookMixin:
                 return f"Rejected: NEPSE same-day rule blocks selling {sym} on the same day as a buy."
         return None
 
-    def _submit_paper_order(self, action: str, symbol: str, qty: int, price: float, slippage: float = 2.0) -> str:
-        """Submit a new paper limit order."""
+    def _submit_paper_order(
+        self, action: str, symbol: str, qty: int, price: float, slippage: float = 2.0, *, market: bool = False
+    ) -> str:
+        """Submit a new paper limit order.
+
+        Linked to nepsequant.com: the order goes to the website's paper book
+        instead. No price typed → a market order (fills at the last price while
+        NEPSE is open); a typed price → a limit order at that price."""
+        book = self._website_book
+        if book is not None:
+            if not book.can_trade:
+                return (
+                    "This key can only read your nepsequant.com paper book. To trade it from here, create a key "
+                    "with \"Paper trading\" ticked at nepsequant.com/desk/settings and run ./nqt-connect login."
+                )
+            limit = None if market else float(price)
+            self._send_website_order(action, symbol, int(qty), limit)
+            kind = "at market" if limit is None else f"limit {limit:,.1f}"
+            return f"Sending {action} {symbol} x{qty} {kind} to your nepsequant.com paper book…"
         self._load_paper_orders()
         block_reason = self._paper_same_day_trade_block(action, symbol)
         if block_reason:
@@ -210,8 +247,38 @@ class OrderBookMixin:
         order = result.order
         return f"Order {order.order_id}: {action} {symbol} x{qty} @ {price:,.1f} slip:{slippage:.1f}% — OPEN"
 
+    @work(thread=True, group="website-book")
+    def _send_website_order(self, action: str, symbol: str, qty: int, limit: Optional[float]) -> None:
+        result = self._website_book.submit(action, symbol, qty, limit_price=limit)
+        self.call_from_thread(self._after_website_change, describe_result(result, action, symbol, qty, limit))
+
+    @work(thread=True, group="website-book")
+    def _cancel_website_orders(self, order_id: Optional[str]) -> None:
+        book = self._website_book
+        if order_id:
+            res = book.cancel(order_id)
+            msg = f"Order {order_id[:8]} cancelled" if res.get("ok") else f"Cancel {order_id[:8]}: {res.get('message')}"
+        else:
+            done, problems = book.cancel_all()
+            msg = f"Cancelled {done} open orders" + (f" ({len(problems)} could not be cancelled)" if problems else "")
+        self.call_from_thread(self._after_website_change, msg)
+
+    def _after_website_change(self, message: str) -> None:
+        self._set_status(message)
+        try:
+            self._append_activity(message)
+        except Exception:
+            pass
+        self._load_paper_orders()
+        self._populate_orders_tab()
+        self._populate_portfolio_and_risk()
+        self._populate_trades_full()
+
     def _cancel_paper_order(self, order_id: str) -> str:
         """Cancel a specific paper order by ID."""
+        if self._website_book is not None:
+            self._cancel_website_orders(order_id)
+            return f"Cancelling order {order_id[:8]} on your nepsequant.com paper book…"
         from backend.trading.live_trader import now_nst
         for o in self._paper_orders:
             if o["id"] == order_id and o["status"] == "OPEN":
@@ -226,6 +293,9 @@ class OrderBookMixin:
 
     def _cancel_all_paper_orders(self) -> str:
         """Cancel all open paper orders."""
+        if self._website_book is not None:
+            self._cancel_website_orders(None)
+            return "Cancelling all open orders on your nepsequant.com paper book…"
         from backend.trading.live_trader import now_nst
         ts = now_nst().strftime("%Y-%m-%d %H:%M:%S")
         count = 0
@@ -242,6 +312,10 @@ class OrderBookMixin:
 
     def _match_paper_orders(self) -> None:
         """Check open orders against current prices and fill if matched."""
+        if self._website_book is not None:
+            # The website fills the shared book; the refresh already fetched it.
+            self._load_paper_orders()
+            return
         from backend.trading.live_trader import now_nst
         if str(getattr(self, "__dict__", {}).get("_current_account_id", "") or "").strip():
             self._load_paper_orders()
@@ -355,7 +429,8 @@ class OrderBookMixin:
         dt_daily.add_columns("ID", "ACTION", "SYMBOL", "QTY", "LIMIT", "SLIP%", "BAND", "STATUS", "TIME")
         from backend.trading.live_trader import now_nst
         today = now_nst().strftime("%Y-%m-%d")
-        daily = [o for o in self._paper_orders if o.get("day") == today]
+        book = self._website_book
+        daily = list(self._paper_orders) if book is not None else [o for o in self._paper_orders if o.get("day") == today]
         for o in daily:
             act_style = GAIN_HI if o["action"] == "BUY" else LOSS_HI
             status_style = YELLOW if o["status"] == "OPEN" else (GAIN if o["status"] == "FILLED" else LOSS)
@@ -428,7 +503,14 @@ class OrderBookMixin:
             f"[bold #ffaf00]ORDER MANAGEMENT[/]  │  "
             f"[{GAIN}]Open: {open_count}[/]  │  "
             f"[{CYAN}]Filled today: {filled_today}[/]  │  "
-            f"[#888888]Mode: PAPER  │  Place orders via the order book[/]"
+            + (
+                f"[#888888]Mode: PAPER  │  Book: nepsequant.com (shared with the website)"
+                + ("" if book.can_trade else "  │  read-only key")
+                + (f"  │  [{LOSS}]{_escape(book.error)}[/]" if book.error else "")
+                + "[/]"
+                if book is not None
+                else "[#888888]Mode: PAPER  │  Place orders via the order book[/]"
+            )
         ))
 
     def _populate_orders_tab_live(self) -> None:
@@ -516,10 +598,13 @@ class OrderBookMixin:
         # If no price, use last close from market data
         if not price_str:
             price = self._get_ltp_for_symbol(sym)
-            if not price:
+            if not price and self._website_book is not None:
+                price = 0.0  # a market order: the website prices it
+            elif not price:
                 self._set_status(f"Order: No price available for {sym}")
                 return
-            self.query_one("#order-inp-price", Input).value = f"{price:.1f}"
+            else:
+                self.query_one("#order-inp-price", Input).value = f"{price:.1f}"
         else:
             try:
                 price = float(price_str.replace(",", ""))
@@ -544,7 +629,7 @@ class OrderBookMixin:
         if self.trade_mode == "live":
             self._submit_live_order(action, sym, qty, price)
         else:
-            msg = self._submit_paper_order(action, sym, qty, price, slippage)
+            msg = self._submit_paper_order(action, sym, qty, price, slippage, market=not price_str)
             self._set_status(msg)
 
         # Clear inputs except slippage (reusable)

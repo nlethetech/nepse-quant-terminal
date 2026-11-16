@@ -96,6 +96,14 @@ class EventsActionsMixin:
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection across tabs."""
+        # Lookup: Enter on a related stock (or a mover) → look that one up
+        if event.data_table.id == "dt-lookup-related":
+            syms = getattr(self, "_lookup_related_syms", [])
+            idx = event.cursor_row
+            if 0 <= idx < len(syms) and syms[idx] and syms[idx] != str(self.lookup_sym or "").upper():
+                self.lookup_sym = syms[idx]
+                self._populate_lookup()
+            return
         # Watchlist: Enter → lookup
         if event.data_table.id == "dt-watchlist":
             idx = event.cursor_row
@@ -156,6 +164,9 @@ class EventsActionsMixin:
                 selected_name = str(selected.get("name") or self._selected_account_id)
                 self._set_status(f"Selected {selected_name} | press ACTIVATE to switch")
             return
+        if event.data_table.id == "dt-strategy-list" and self._website_strategies is not None:
+            self._webstrat_select_row(event.cursor_row)
+            return
         if event.data_table.id == "dt-strategy-list":
             idx = event.cursor_row
             strategies = list(getattr(self, "_strategies", []) or [])
@@ -209,6 +220,9 @@ class EventsActionsMixin:
             mv.update(Text("Press A to run agent analysis, or type a question below", style=LABEL))
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.data_table.id == "dt-strategy-list" and self._website_strategies is not None:
+            self._webstrat_select_row(event.cursor_row)
+            return
         if event.data_table.id == "dt-strategy-list":
             idx = event.cursor_row
             strategies = list(getattr(self, "_strategies", []) or [])
@@ -226,6 +240,8 @@ class EventsActionsMixin:
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
         bid = event.button.id
+        if str(bid or "").startswith("webstrat-") and self._on_webstrat_button(bid):
+            return
         if bid == "hedge-toggle-btn":
             self._hedge_enabled = not self._hedge_enabled
             try:
@@ -463,6 +479,8 @@ class EventsActionsMixin:
         if not question:
             return
         event.input.value = ""
+        if self._refuse_secret_in_composer(question):
+            return  # looked like an API key: not sent, not saved
         if question.upper() == "A":
             self._run_agent_analysis()
         elif question.startswith("/"):

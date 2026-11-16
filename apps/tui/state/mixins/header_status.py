@@ -8,6 +8,7 @@ from datetime import datetime
 
 from rich.markup import escape as _escape_markup
 from rich.text import Text
+from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from apps.tui.theme import GAIN_HI, LABEL, LOSS_HI, WHITE, YELLOW
@@ -18,6 +19,9 @@ class HeaderStatusMixin:
         return False
 
     def _display_mode_label(self) -> str:
+        if self._website_book is not None:
+            trader = self._autotrader
+            return "PAPER · AUTO-TRADE" if trader is not None and trader.enabled else "PAPER · NEPSEQUANT.COM"
         return "PAPER AUTO"
 
     def _update_header(self):
@@ -26,7 +30,7 @@ class HeaderStatusMixin:
         from apps.tui.dashboard_tui import TAB_LABELS, TAB_NAMES
         parts = []
         # Mode indicator
-        parts.append("[bold #111820 on #79ffb3] PAPER AUTO [/]")
+        parts.append(f"[bold #111820 on #79ffb3] {self._display_mode_label()} [/]")
         for name, key in TAB_NAMES.items():
             label = TAB_LABELS.get(name, name.upper())
             if name == self.active_tab:
@@ -110,7 +114,11 @@ class HeaderStatusMixin:
         body_style = "#95a4b5"
         if lowered.startswith("rejected:") or lowered.startswith("order cancelled:") or "same-day rule" in lowered:
             body_style = LOSS_HI
-        self.query_one("#status-bar", Static).update(
+        try:
+            bar = self.query_one("#status-bar", Static)
+        except NoMatches:  # the terminal is closing; a late background result has nowhere to go
+            return
+        bar.update(
             Text.from_markup(
                 f"[bold #f2b94b]{stamp}[/] [#516273]::[/] [{body_style}]{_escape_markup(compact)}[/]"
             )

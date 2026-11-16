@@ -20,6 +20,10 @@ EXPERIMENTAL_GEMMA4_MODEL = "unsloth/gemma-4-E4B-it-UD-MLX-4bit"
 DEFAULT_AGENT_PRESET = "ollama"
 DEFAULT_OLLAMA_MODEL = "llama3"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+DEFAULT_OPENAI_MODEL = "gpt-5-mini"
+DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5"
+# Presets whose model choice is remembered per provider in ai.json.
+REMEMBERED_MODEL_PRESETS = {"ollama", "openai", "anthropic"}
 
 AGENT_BACKEND_PRESETS: dict[str, dict[str, Any]] = {
     "ollama": {
@@ -52,6 +56,26 @@ AGENT_BACKEND_PRESETS: dict[str, dict[str, Any]] = {
         "fallback_backend": "",
         "trust_remote_code": False,
         "description": "Local Gemma 4 experimental MLX checkpoint.",
+    },
+    "openai": {
+        "backend": "openai",
+        "label": "OpenAI API",
+        "provider_label": "openai",
+        "source_label": "cloud_openai",
+        "model": DEFAULT_OPENAI_MODEL,
+        "fallback_backend": "",
+        "trust_remote_code": False,
+        "description": "OpenAI (or OpenAI-compatible) API on your own key: ./nqt-connect ai setup.",
+    },
+    "anthropic": {
+        "backend": "anthropic",
+        "label": "Claude API",
+        "provider_label": "anthropic",
+        "source_label": "cloud_anthropic",
+        "model": DEFAULT_ANTHROPIC_MODEL,
+        "fallback_backend": "",
+        "trust_remote_code": False,
+        "description": "Claude through the Anthropic API on your own key: ./nqt-connect ai setup. Low-cost: claude-haiku-5-5.",
     },
     "claude": {
         "backend": "claude",
@@ -115,6 +139,9 @@ def _normalize_active_agent_config(raw: dict[str, Any] | None) -> dict[str, Any]
         "description": str(payload.get("description") or base.get("description") or ""),
         "updated_at": float(payload.get("updated_at") or time.time()),
     }
+    host = str(payload.get("ollama_host") or "").strip()  # only when set on purpose
+    if host:
+        normalized["ollama_host"] = host
     return normalized
 
 
@@ -150,6 +177,13 @@ def set_active_agent(
     preset = dict(AGENT_BACKEND_PRESETS.get(clean) or {})
     if not preset and clean not in {preset["backend"] for preset in AGENT_BACKEND_PRESETS.values()}:
         raise ValueError(f"Unknown agent backend or preset: {backend}")
+    if model is None and clean in REMEMBERED_MODEL_PRESETS:
+        try:
+            from backend.agents.ai_settings import remembered_model
+
+            model = remembered_model(clean) or None
+        except Exception:
+            model = None
 
     payload = _normalize_active_agent_config(
         {
@@ -162,6 +196,15 @@ def set_active_agent(
             "fallback_backend": fallback_backend if fallback_backend is not None else preset.get("fallback_backend"),
             "trust_remote_code": trust_remote_code if trust_remote_code is not None else preset.get("trust_remote_code"),
             "description": str(preset.get("description") or ""),
+            "ollama_host": _current_ollama_host(),
         }
     )
     return save_active_agent_config(payload)
+
+
+def _current_ollama_host() -> str:
+    try:
+        current = json.loads(ACTIVE_AGENT_FILE.read_text()) if ACTIVE_AGENT_FILE.exists() else {}
+    except Exception:
+        current = {}
+    return str((current or {}).get("ollama_host") or "").strip() if isinstance(current, dict) else ""

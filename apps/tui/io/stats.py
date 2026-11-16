@@ -3,6 +3,7 @@ from __future__ import annotations
 import json as _json
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -230,6 +231,47 @@ def _compute_portfolio_stats(md: MD) -> dict:
 
 def _compute_account_portfolio_stats(md: MD, account_dir: Path) -> dict:
     """Compute portfolio stats from account-specific files (paper_portfolio.csv etc.)."""
+    _port_path = account_dir / "paper_portfolio.csv"
+    _nav_path = account_dir / "paper_nav_log.csv"
+    _tl_path = account_dir / "paper_trade_log.csv"
+    _state_path = account_dir / "paper_state.json"
+
+    port = pd.read_csv(_port_path) if _port_path.exists() else pd.DataFrame()
+    nav_log = pd.read_csv(_nav_path) if _nav_path.exists() else pd.DataFrame()
+    trade_log = pd.read_csv(_tl_path) if _tl_path.exists() else pd.DataFrame()
+    account_capital = _account_initial_capital_from_files(account_dir)
+
+    cash: Optional[float] = None
+    if _state_path.exists():
+        try:
+            _ps = _json.loads(_state_path.read_text())
+            _c = float(_ps.get("cash", 0))
+            if _c >= 0:
+                cash = _c
+        except Exception:
+            pass
+    return _stats_from_frames(
+        md, port, nav_log, trade_log,
+        account_capital=account_capital,
+        cash=cash,
+        derive_cash=not _state_path.exists(),
+    )
+
+
+def _stats_from_frames(
+    md: MD,
+    port: pd.DataFrame,
+    nav_log: pd.DataFrame,
+    trade_log: pd.DataFrame,
+    *,
+    account_capital: float,
+    cash: Optional[float],
+    derive_cash: bool = False,
+    prefer_book_price: bool = False,
+) -> dict:
+    """Portfolio stats from a book's frames: the account files, or the website's
+    paper book (``prefer_book_price``: value holdings at the book's own last
+    price, so the terminal shows the same value as the website)."""
     ltps = md.ltps()
     quote_map = {}
     if not md.quotes.empty:
@@ -242,16 +284,6 @@ def _compute_account_portfolio_stats(md: MD, account_dir: Path) -> dict:
             for r in md.quotes.itertuples()
         }
 
-    _port_path = account_dir / "paper_portfolio.csv"
-    _nav_path = account_dir / "paper_nav_log.csv"
-    _tl_path = account_dir / "paper_trade_log.csv"
-    _state_path = account_dir / "paper_state.json"
-
-    port = pd.read_csv(_port_path) if _port_path.exists() else pd.DataFrame()
-    nav_log = pd.read_csv(_nav_path) if _nav_path.exists() else pd.DataFrame()
-    trade_log = pd.read_csv(_tl_path) if _tl_path.exists() else pd.DataFrame()
-    account_capital = _account_initial_capital_from_files(account_dir)
-
     positions = []
     total_cost = total_value = 0.0
     total_prev_value = 0.0
@@ -263,7 +295,8 @@ def _compute_account_portfolio_stats(md: MD, account_dir: Path) -> dict:
             entry = float(r["Buy_Price"])
             cost = float(r.get("Total_Cost_Basis", entry * qty))
             quote = quote_map.get(sym, {})
-            cur = ltps.get(sym) or float(r.get("Last_LTP") or entry)
+            book_px = float(r.get("Last_LTP") or 0) if prefer_book_price else 0.0
+            cur = book_px or ltps.get(sym) or float(r.get("Last_LTP") or entry)
             prev_close = float(quote.get("prev_close") or 0) or cur
             val = cur * qty; pnl = val - cost
             ret = pnl / cost * 100 if cost else 0
@@ -291,18 +324,12 @@ def _compute_account_portfolio_stats(md: MD, account_dir: Path) -> dict:
                 "date": entry_dt, "days": days, "sector": sec,
             })
 
-    # Cash from paper_state.json
-    cash = float(account_capital)
-    if _state_path.exists():
-        try:
-            _ps = _json.loads(_state_path.read_text())
-            _c = float(_ps.get("cash", 0))
-            if _c >= 0:
-                cash = _c
-        except Exception:
-            pass
-    elif total_cost > 0:
-        cash = max(0.0, float(account_capital) - total_cost)
+    # Cash: the book's own figure (paper_state.json / the website); a book with
+    # no state file derives it from the starting capital.
+    if cash is None:
+        cash = float(account_capital)
+        if derive_cash and total_cost > 0:
+            cash = max(0.0, float(account_capital) - total_cost)
 
     nav = cash + total_value
     baseline_nav = float(account_capital)

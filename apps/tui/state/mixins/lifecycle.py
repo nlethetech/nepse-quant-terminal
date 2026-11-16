@@ -13,6 +13,7 @@ import time
 from typing import Optional
 
 from rich.text import Text
+from textual import work
 
 from backend.quant_pro.dashboard_data import MD
 from backend.market.kalimati_market import init_kalimati_db
@@ -99,6 +100,18 @@ class LifecycleMixin:
         self._watchlist_rates_rows: list[dict] = []
         self._watchlist_commodity_rows: list[dict] = []
         self._last_macro_rates_fetch_at: float = 0.0
+        # Linked to nepsequant.com (./nqt-connect login)? Then the website's paper
+        # book is the terminal's paper book; it is fetched in the background.
+        from apps.tui.io.website_book import WebsiteBook
+        self._website_book = WebsiteBook.from_saved() if self.trade_mode == "paper" else None
+        # Linked: the broker panels come from nepsequant.com's floorsheet too.
+        from apps.tui.io.website_floor import WebsiteFloor
+        self._website_floor = WebsiteFloor.from_book(self._website_book)
+        # Linked: the Lookup tab shows nepsequant.com's page for a stock
+        # (history, facts, related stocks, results, news, broker flow).
+        from apps.tui.io.website_lookup import WebsiteLookup
+        self._website_lookup = WebsiteLookup.from_book(self._website_book) or WebsiteLookup.from_saved()
+        self._init_website_strategies()
         self._build_ticker()
         self._update_header()
         self._update_index()
@@ -131,6 +144,7 @@ class LifecycleMixin:
         self._refresh_order_action_buttons()
         self._paper_watchlist = _load_watchlist()
         self._watchlist = list(self._paper_watchlist)
+        self._install_agent_context_provider()
         self._populate_watchlist()
         self._populate_signals_workspace()
         self._load_signals_async()
@@ -143,14 +157,45 @@ class LifecycleMixin:
         self._set_status(
             f"Mode: {mode_label}  │  Session: {self.md.latest}  │  "
             f"▲{self.md.adv} ▼{self.md.dec}  │  Auto-refresh 30s"
+            + ("  │  Paper book: nepsequant.com (loading…)" if self._website_book is not None else "")
         )
+        if self._website_book is not None:
+            self._load_website_book()
         self.set_interval(30, self._auto_refresh)
         self.set_interval(TICKER_SPEED, self._scroll_ticker)
         self.set_interval(0.45, self._animate_agent_typing)
+        # The analyst's automatic brief: checked every minute, first ~20 s after start
+        # (once the shared book and strategies have loaded).
+        self.set_timer(20, self._agent_proactive_tick)
+        self.set_interval(60, self._agent_proactive_tick)
 
-        # Start one auto-trading engine per account in background threads
-        if self.trade_mode == "paper":
+        # Start one auto-trading engine per account in background threads.
+        # Not with the shared website book: automatic trading would trade a
+        # local book you no longer see.
+        if self.trade_mode == "paper" and self._website_book is None:
             self._start_all_account_engines()
+
+    @work(thread=True, group="website-book")
+    def _load_website_book(self) -> None:
+        book = self._website_book
+        ok = book.refresh()
+        self.call_from_thread(self._on_website_book_loaded, ok)
+
+    def _on_website_book_loaded(self, ok: bool) -> None:
+        book = self._website_book
+        if book is None:
+            return
+        if ok:
+            note = "" if book.can_trade else "  (read-only key: create a key with Paper trading ticked to trade)"
+            self._set_status(f"Paper book: your nepsequant.com paper portfolio, shared with the website{note}")
+        else:
+            self._set_status(f"Paper book: could not load nepsequant.com — {book.error}")
+        self._load_paper_orders()
+        self._populate_orders_tab()
+        self._populate_portfolio_and_risk()
+        self._populate_trades_full()
+        self._refresh_active_tab_view()
+        self._load_website_strategies(True)
 
     def on_unmount(self) -> None:
         """Graceful shutdown — stop trading engine."""
