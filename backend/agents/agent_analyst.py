@@ -909,7 +909,9 @@ def _compute_stock_metrics(symbol: str, current_price: float = 0) -> dict:
 
         # P/E ratio
         if eps > 0 and current_price > 0:
-            annualized_eps = eps * (4 / q_num) if q_num > 0 else eps
+            from backend.quant_pro.stock_report import annualized_report_eps
+
+            annualized_eps = annualized_report_eps(eps, q_num, net_profit, share_capital) or eps
             metrics["pe_ratio"] = round(current_price / annualized_eps, 1)
             metrics["eps_annualized"] = round(annualized_eps, 2)
         elif eps > 0:

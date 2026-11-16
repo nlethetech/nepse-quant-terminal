@@ -84,6 +84,7 @@ def test_build_stock_report_prefers_cached_financials(tmp_path, monkeypatch):
                         "total_assets": 1000,
                         "total_liabilities": 700,
                         "shareholders_equity": 300,
+                        "share_capital": 1000,  # 10 shares: the printed EPS 12 is year-to-date
                         "retained_earnings": 40,
                         "total_deposits": 800,
                         "total_loans": 640,

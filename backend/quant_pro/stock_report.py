@@ -565,6 +565,28 @@ def _merge_quarter_rows(primary: list[dict[str, Any]], secondary: list[dict[str,
     return merged
 
 
+def annualized_report_eps(eps: float | None, quarter: int | None, net_profit: float | None = None,
+                          share_capital: float | None = None) -> float | None:
+    """A quarterly report's EPS, annualized exactly once.
+
+    NEPSE quarterly reports usually print EPS already annualized (SEBON's
+    format), but not every company does. When the report gives net profit
+    (year to date) and share capital (Rs 100 par), compare the printed EPS with
+    both readings and annualize only a year-to-date figure. Without them, trust
+    the printed figure as annualized, like ``quarterly_earnings.eps``."""
+    if eps is None:
+        return None
+    q = int(quarter or 0)
+    if q <= 0 or q >= 4:
+        return eps
+    if net_profit and share_capital and share_capital > 0:
+        ytd = net_profit / (share_capital / 100.0)
+        annual = ytd * 4.0 / q
+        if ytd and abs(eps - ytd) < abs(eps - annual):
+            return eps * 4.0 / q  # the report printed year-to-date EPS
+    return eps
+
+
 def _derive_metrics(latest: dict[str, Any], previous: dict[str, Any] | None, current_price: float | None, fundamentals: dict[str, Any]) -> dict[str, float | None]:
     metrics: dict[str, float | None] = {}
     revenue = _safe_float(latest.get("revenue"))
@@ -591,9 +613,7 @@ def _derive_metrics(latest: dict[str, Any], previous: dict[str, Any] | None, cur
     if metrics["loan_to_deposit_pct"] is not None:
         metrics["loan_to_deposit_pct"] *= 100
 
-    annualized_eps = None
-    if eps is not None and q_num > 0:
-        annualized_eps = eps * (4 / q_num)
+    annualized_eps = annualized_report_eps(eps, q_num, net_profit, _safe_float(latest.get("share_capital")))
     metrics["eps_annualized"] = annualized_eps
 
     metrics["roe_pct"] = _safe_div(annualized_eps, book_value)
