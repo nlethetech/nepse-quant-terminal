@@ -104,7 +104,7 @@ def test_load_fundamentals_merges_quarterly_reports_and_db(tmp_path, monkeypatch
     conn.close()
 
     fd = data["NABIL"]
-    assert round(fd.pe_ratio, 2) == 17.50
+    assert round(fd.pe_ratio, 2) == 35.00  # 420 / 12 (EPS stored already annualized)
     assert round(fd.pb_ratio, 2) == round(420.0 / 155.0, 2)
     assert round(fd.eps_growth_qoq, 4) == round((12.0 - 9.0) / 9.0, 4)
     assert round(fd.revenue_growth_qoq, 4) == round((600.0 - 520.0) / 520.0, 4)
