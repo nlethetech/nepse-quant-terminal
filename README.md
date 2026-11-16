@@ -14,9 +14,13 @@ A terminal-based quantitative trading dashboard for the Nepal Stock Exchange (NE
 
 ## Connect to NEPSE Quant
 
+[![Watch the demo: connect the NEPSE Quant Terminal to nepsequant.com](docs/media/nepse-quant-terminal-demo.png)](docs/media/nepse-quant-terminal-demo.mp4)
+
+[▶ Watch the demo](docs/media/nepse-quant-terminal-demo.mp4) (one continuous take): create a key on nepsequant.com, connect the terminal, add an AI analyst, then Portfolio, Lookup, Orders, Signals, Strategies and Agents. *Recorded on a demo account: virtual money, back-dated example trades, not a track record.*
+
 Use your [nepsequant.com](https://nepsequant.com) paper portfolio as the terminal's paper book: one book on the website, your phone and this terminal.
 
-1. Sign in at [nepsequant.com](https://nepsequant.com) and create a key under **Settings**. Tick **Paper trading** so the terminal can place paper orders (if you don't see the option yet, it is still being rolled out; a key without it shows your book read-only).
+1. Sign in at [nepsequant.com](https://nepsequant.com) (free) and open **Settings → AI agents**. Type a name, tick **Paper trading** so the terminal can place paper orders, and press **Create key**. The key is shown once: copy it. (A key without Paper trading shows your book read-only.)
 2. From the repository folder:
 
 ```bash
@@ -27,11 +31,13 @@ Use your [nepsequant.com](https://nepsequant.com) paper portfolio as the termina
 ./nqt-connect logout    # back to the terminal's own local paper book
 ```
 
-Then start the terminal as usual. While connected:
+3. Optional: add an AI analyst with `./nqt-connect ai setup` (Ollama on your computer, or your own OpenAI or Claude key; see [AI Agent Setup](#ai-agent-setup)).
+4. Start the terminal: `python -m apps.tui.dashboard_tui`. While connected:
 
 - **Portfolio, Orders and Trades show your nepsequant.com paper book**, refreshed every 30 seconds.
 - **Orders you place go to the website's paper simulator**: leave the price empty for a market order, type a price for a limit order. The website applies its rules (NEPSE hours, Rs 0.10 ticks, price band, T+2, fees and capital gains tax), so a fill here is the same fill you see on the website.
-- **Automatic trading is off**: the auto-trading engine and agent auto-orders only run on a local book.
+- **Lookup (key 4, or L) shows nepsequant.com's page for a stock**: a volume chart (green up days, red down days), a year of daily prices, key facts (market cap, P/E, P/B, ROE, yield, 52-week range), related stocks in the same sector (press Enter on one to open it), quarterly results, dividends and bonus, news and exchange filings, and the brokers who bought and sold most over the last 20 sessions. For `NEPSE` it shows the index and the day's movers.
+- **Strategies (key 0) are the ones you built on nepsequant.com**: Lab rule sets, signal blends and saved Screener screens. Assign one to see its picks on the Signals tab; **AUTO** lets the terminal trade it on your paper book while the terminal is open and NEPSE is trading (at most 8 orders a minute; it only sells what it bought). The local auto-trading engine and the agent's own auto-orders stay off while linked.
 - **The broker panels on the Signals tab (BROKER FLOOR and TOP BROKERS) use nepsequant.com's floorsheet**: the terminal downloads the latest day's trades (about 0.3 MB, at most every five minutes) and computes the panels itself, so you don't need to run the local floorsheet scraper. The panel title shows the day and which engine computed it (`rust` or `python`). These panels describe where trades were placed; a broker acts for many clients, so they are analytics, not trade signals.
 - **Virtual money only.** Nothing here can reach a broker.
 
