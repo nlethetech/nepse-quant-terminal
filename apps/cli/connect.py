@@ -41,7 +41,14 @@ MAX_BODY_BYTES = 256 * 1024 * 1024  # a gzip reply is never unpacked past this
 
 
 class ConnectError(Exception):
-    """A problem the user can act on; shown without a traceback."""
+    """A problem the user can act on; shown without a traceback.
+
+    ``transient`` marks a busy or unreachable website (too many requests, a
+    server error, no connection): the same request may work a minute later."""
+
+    def __init__(self, message: str = "", *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 # Where a NEPSE Quant key may ever be sent: the website itself, or this
@@ -169,12 +176,18 @@ def request_json(
                 f"{base_url()} answered with a redirect ({exc.code}); not following it, so your key stays private."
             ) from exc
         if exc.code == 429:
-            raise ConnectError(_redacted(_detail(exc), key) or "Too many requests. Wait a minute and try again.") from exc
+            raise ConnectError(
+                _redacted(_detail(exc), key) or "Too many requests. Wait a minute and try again.", transient=True
+            ) from exc
         if exc.code in (403, 404, 409, 422, 428):
             raise ConnectError(_redacted(_detail(exc), key) or f"NEPSE Quant refused the request ({exc.code}).") from exc
-        raise ConnectError(f"NEPSE Quant answered with an error ({exc.code}). Try again shortly.") from exc
+        raise ConnectError(
+            f"NEPSE Quant answered with an error ({exc.code}). Try again shortly.", transient=exc.code >= 500
+        ) from exc
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
-        raise ConnectError(f"Could not reach {base_url()}. Check your connection and try again.") from exc
+        raise ConnectError(
+            f"Could not reach {base_url()}. Check your connection and try again.", transient=True
+        ) from exc
 
 
 def money(value: Any) -> str:

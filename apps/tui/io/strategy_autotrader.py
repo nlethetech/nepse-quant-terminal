@@ -44,6 +44,7 @@ import json
 import math
 import os
 import threading
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -63,6 +64,10 @@ except ImportError:
 STATE_FILE = Path(get_runtime_dir(__file__)) / "website_book" / "autotrader.json"
 STALE_PICKS_DAYS = 4  # weekdays: older picks are not bought
 SETTLE_DAYS = 2  # T+2: shares bought on T can be sold from the second trading day after T
+# The website takes at most 10 paper orders a minute per account (its order
+# ticket shares that allowance), so auto-trade sends at most 8 a minute and
+# places a long list (a 40-name selection) over a few passes.
+ORDERS_PER_MINUTE = 8
 FEE_BUFFER = 0.985  # leave room for broker commission, SEBON fee and DP charge
 LOG_KEEP = 60
 
@@ -131,11 +136,16 @@ def plan(
     open_orders: list[dict[str, Any]],
     state: dict[str, Any],
     gate: Optional[dict[str, Any]] = None,
+    max_now: Optional[int] = None,
 ) -> tuple[list[Planned], dict[str, Any], list[str]]:
     """The orders the strategy wants now, the updated state, and notes.
 
     ``gate`` is the strategy's market filter (None for a strategy without one):
-    ``{"invested": bool, "since": date, "selection_date": date, ...}``."""
+    ``{"invested": bool, "since": date, "selection_date": date, ...}``.
+
+    ``max_now`` caps the orders of this pass (the website's per-minute
+    allowance). When it cuts the buys short, the rebalance is not marked done,
+    so the next pass buys the rest."""
     st = json.loads(json.dumps(state))  # never mutate the caller's copy
     notes: list[str] = []
     if st.get("day") != today.isoformat():
@@ -154,6 +164,8 @@ def plan(
     max_pos = max(1, int(params["max_positions"]))
     max_orders = 2 * max_pos + 2
     budget_orders = max(0, max_orders - len(st.get("done_today", [])))
+    if max_now is not None:
+        budget_orders = min(budget_orders, max(0, int(max_now)))
     orders: list[Planned] = []
 
     def sellable(sym: str, info: dict[str, Any]) -> bool:
@@ -250,8 +262,12 @@ def plan(
         if sec:
             sector_value[sec] = sector_value.get(sec, 0.0) + _f(held[s].get("last")) * _f(held[s].get("quantity"))
 
+    cut = False  # the order allowance ran out before the list did
     for pick in picks:
-        if slots <= 0 or len(orders) >= budget_orders:
+        if slots <= 0:
+            break
+        if len(orders) >= budget_orders:
+            cut = True
             break
         sym = str(pick.get("symbol") or "").upper()
         price = _f(pick.get("ltp"))
@@ -276,6 +292,9 @@ def plan(
         slots -= 1
         if sector:
             sector_value[sector] = sector_value.get(sector, 0.0) + qty * price
+    if cut:
+        notes.append("Placing the rest of the buys over the next few minutes (the website takes 10 orders a minute).")
+        return orders, st, notes
     st["last_rebalance"] = today.isoformat()
     if rotating:
         st["last_selection"] = sel_date
@@ -289,9 +308,10 @@ def key_fingerprint(key: str) -> str:
 class AutoTrader:
     """The state file plus one pass of: plan → send → record."""
 
-    def __init__(self, account_key: str, *, path: Path = STATE_FILE) -> None:
+    def __init__(self, account_key: str, *, path: Path = STATE_FILE, clock=time.time) -> None:
         self._account = key_fingerprint(account_key)
         self._path = Path(path)
+        self._clock = clock
         self._lock = threading.Lock()
         self.state = self._load()
 
@@ -403,6 +423,10 @@ class AutoTrader:
                 self.save()
             return []
         open_rows, _history = book.order_records()
+        # the per-minute allowance, kept in the shared state so two windows taking turns count together
+        now = float(self._clock())
+        sent_at = [float(t) for t in self.state.get("sent_at") or [] if now - float(t) < 60.0]
+        prev_rebalance, prev_selection = self.state.get("last_rebalance"), self.state.get("last_selection")
         orders, new_state, notes = plan(
             today=today,
             params=params,
@@ -414,6 +438,7 @@ class AutoTrader:
             open_orders=[{"action": o["action"], "symbol": o["symbol"]} for o in open_rows],
             state=self.state,
             gate=gate_of(strategy, picks),
+            max_now=max(0, ORDERS_PER_MINUTE - len(sent_at)),
         )
         self.state = new_state
         shown: list[str] = []
@@ -421,9 +446,21 @@ class AutoTrader:
             if note not in self.state.get("notes_today", []):
                 self.state.setdefault("notes_today", []).append(note)
                 self._log(note)
-        for order in orders:
+        unsent_buys = False
+        for i, order in enumerate(orders):
             result = book.submit(order.action, order.symbol, order.qty)
+            sent_at.append(float(self._clock()))
             ok = bool(result.get("ok"))
+            if not ok and result.get("transient"):
+                # the website was busy or unreachable: not a refusal of this order,
+                # so it (and the rest of this pass) is tried again on a later pass
+                unsent_buys = any(o.action == "BUY" for o in orders[i:])
+                note = "The website is busy or unreachable; auto-trade will try again shortly."
+                if note not in self.state.get("notes_today", []):
+                    self.state.setdefault("notes_today", []).append(note)
+                    self._log(f"{note} ({str(result.get('message') or '')[:100]})")
+                    shown.append(f"AUTO {note}")
+                break
             self.state.setdefault("done_today", []).append(
                 {"action": order.action, "symbol": order.symbol, "ok": ok}
             )
@@ -439,5 +476,8 @@ class AutoTrader:
             )
             self._log(outcome)
             shown.append(f"AUTO {outcome}")
+        self.state["sent_at"] = sent_at
+        if unsent_buys:  # the rebalance is not done until those buys go through
+            self.state["last_rebalance"], self.state["last_selection"] = prev_rebalance, prev_selection
         self.save()
         return shown

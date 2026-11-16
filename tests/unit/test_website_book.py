@@ -208,7 +208,7 @@ def test_a_refused_order_comes_back_with_the_websites_reason():
 
     book._request = refuse
     result = book.submit("BUY", "NABIL", 10)
-    assert result == {"ok": False, "status": "REFUSED", "message": "This key can only read."}
+    assert result == {"ok": False, "status": "REFUSED", "message": "This key can only read.", "transient": False}
     assert "Rejected" in wb.describe_result(result, "BUY", "NABIL", 10, None)
 
 

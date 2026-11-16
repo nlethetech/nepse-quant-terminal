@@ -252,9 +252,11 @@ class WebsiteBook:
         try:
             result = self._request("/api/cli/paper/orders", self._key, method="POST", body=body)
         except connect.ConnectError as exc:
-            return {"ok": False, "status": "REFUSED", "message": str(exc)}
+            # transient: the website was busy or unreachable, not a refusal of this order
+            return {"ok": False, "status": "REFUSED", "message": str(exc),
+                    "transient": bool(getattr(exc, "transient", False))}
         except Exception as exc:
-            return {"ok": False, "status": "ERROR", "message": f"Could not reach {self.site}: {exc}"}
+            return {"ok": False, "status": "ERROR", "message": f"Could not reach {self.site}: {exc}", "transient": True}
         self.refresh()
         return dict(result or {})
 
