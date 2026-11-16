@@ -2009,6 +2009,10 @@ def _gather_base_context() -> dict:
         if signal_snapshot:
             sigs = list(signal_snapshot.get("signals") or [])
             regime = str(signal_snapshot.get("regime") or "unknown")
+        elif str(os.environ.get("NEPSE_AGENT_SIGNALS_SOURCE") or "") == "website":
+            # Linked to nepsequant.com: candidates come only from the assigned
+            # website strategy's picks; never fall back to the local engine.
+            sigs, regime = [], "unknown"
         else:
             from backend.backtesting.simple_backtest import load_all_prices
             from backend.quant_pro.dashboard_data import _db

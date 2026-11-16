@@ -10,6 +10,7 @@ circular-import trap.
 """
 
 import os
+from pathlib import Path
 import shlex
 import threading
 import time
@@ -93,6 +94,10 @@ class AgentChatMixin:
             self._agent_archived_history = []
 
     def _sync_agent_account_context_env(self) -> None:
+        if getattr(self, "_website_strategies", None) is not None:
+            self._sync_agent_context_from_website()
+            return
+        os.environ.pop("NEPSE_AGENT_SIGNALS_SOURCE", None)
         account_id = str(getattr(self, "_current_account_id", "account_1") or "account_1")
         account_dir = _account_dir(account_id)
         strategy_id = str((self._strategy_account_binding(account_id) or {}).get("strategy_id") or strategy_registry.default_strategy_for_account(account_id))
@@ -102,6 +107,62 @@ class AgentChatMixin:
         os.environ["NEPSE_ACTIVE_PORTFOLIO_FILE"] = str(account_dir / "paper_portfolio.csv")
         os.environ["NEPSE_ACTIVE_STRATEGY_ID"] = strategy_id
         os.environ["NEPSE_ACTIVE_STRATEGY_NAME"] = strategy_registry.strategy_name(strategy_id)
+
+    def _sync_agent_context_from_website(self) -> None:
+        """Linked to nepsequant.com: the agent reviews the shared paper book and
+        the assigned website strategy's picks for today (never the local
+        signal engine). Uses cached data only, so it is safe on the UI thread;
+        the analysis worker fetches fresh picks before calling this."""
+        from backend.agents.agent_analyst import _current_nst_session_date, publish_agent_signal_snapshot
+        from backend.quant_pro.paths import ensure_dir, get_runtime_dir
+
+        strategies, book = self._website_strategies, self._website_book
+        folder = ensure_dir(Path(get_runtime_dir(__file__)) / "website_book")
+        portfolio_file = folder / "agent_portfolio.csv"
+        try:
+            book.portfolio_frame().to_csv(portfolio_file, index=False)
+        except Exception:
+            pass
+        assigned = strategies.assigned_strategy() if strategies is not None else None
+        strategy_id = str((assigned or {}).get("id") or "nepsequant:none")
+        strategy_name = str((assigned or {}).get("name") or "No strategy assigned")
+        os.environ["NEPSE_ACTIVE_ACCOUNT_ID"] = "nepsequant_paper"
+        os.environ["NEPSE_ACTIVE_ACCOUNT_NAME"] = "nepsequant.com paper book"
+        os.environ["NEPSE_ACTIVE_ACCOUNT_DIR"] = str(folder)
+        os.environ["NEPSE_ACTIVE_PORTFOLIO_FILE"] = str(portfolio_file)
+        os.environ["NEPSE_ACTIVE_STRATEGY_ID"] = strategy_id
+        os.environ["NEPSE_ACTIVE_STRATEGY_NAME"] = strategy_name
+        os.environ["NEPSE_AGENT_SIGNALS_SOURCE"] = "website"
+        picks = strategies.cached_picks(strategy_id) if assigned else None
+        rows = list(picks.rows) if picks else []
+        n = max(len(rows), 1)
+        signals = [
+            {
+                "symbol": str(r.get("symbol") or "").upper(),
+                "signal_type": f"nepsequant_{assigned.get('kind') or 'strategy'}",
+                # rank-based 1.0 → 0: rule-set scores are sort values, not comparable across strategies
+                "score": round(1.0 - (int(r.get("rank") or i + 1) - 1) / n, 3),
+                "strength": round(1.0 - (int(r.get("rank") or i + 1) - 1) / n, 3),
+                "confidence": 0.5,
+                "reasoning": f"Rank {r.get('rank') or i + 1} in your nepsequant.com strategy \"{strategy_name}\""
+                + (f": {r.get('reason')}" if r.get("reason") else ""),
+            }
+            for i, r in enumerate(rows)
+            if r.get("symbol")
+        ]
+        try:
+            publish_agent_signal_snapshot({
+                "account_id": "nepsequant_paper",
+                "strategy_id": strategy_id,
+                "strategy_name": strategy_name,
+                "context_date": _current_nst_session_date(),
+                "regime": "unknown",
+                "source": "nepsequant.com",
+                "picks_as_of": picks.as_of if picks else None,
+                "signals": signals,
+            })
+        except Exception:
+            pass
 
     def _current_agent_provider_label(self) -> str:
         try:
@@ -280,6 +341,12 @@ class AgentChatMixin:
             return
         self._agent_analysis_running = True
         try:
+            strategies = getattr(self, "_website_strategies", None)
+            if strategies is not None:  # linked: fresh picks for the assigned strategy first
+                if not strategies.loaded:
+                    strategies.refresh()
+                if strategies.assigned:
+                    strategies.picks(strategies.assigned)
             self._sync_agent_account_context_env()
             self.call_from_thread(self._set_status, "⧖ Agent analyzing..." if force else "⧖ Loading agent...")
             self.call_from_thread(self._update_agent_status, "ANALYZING..." if force else "LOADING...", "running")
@@ -623,10 +690,23 @@ class AgentChatMixin:
                     Text(first_sentence, style=WHITE),
                 )
         else:
-            dt.add_row(
-                _dim_text("—"), _dim_text("Loading top picks"),
-                *[Text("")] * 5)
+            dt.add_row(_dim_text("—"), _dim_text(self._agent_empty_picks_reason(a)), *[Text("")] * 5)
         self._populate_agent_detail_default(a)
+
+    def _agent_empty_picks_reason(self, analysis: dict | None) -> str:
+        """Why the picks table is empty, in a few words (never a bare "Loading")."""
+        a = dict(analysis or {})
+        if getattr(self, "_agent_analysis_running", False) or not a:
+            return "Analysing… (A to run again)"
+        strategies = getattr(self, "_website_strategies", None)
+        if strategies is not None and not strategies.assigned:
+            return "No strategy assigned: 0 Strategies → ASSIGN, then A"
+        raw = str(a.get("raw_response") or "")
+        if raw.startswith("ERROR:"):
+            return raw[6:].strip()[:70]
+        if not list(a.get("shortlist") or []):
+            return "No candidates today (the strategy picked nothing)"
+        return "No picks yet: press A to analyse"
 
     def _append_chat(
         self,
