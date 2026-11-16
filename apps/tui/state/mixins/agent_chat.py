@@ -62,7 +62,9 @@ from backend.agents.runtime_config import (
 )
 
 AGENT_ARCHIVE_RENDER_LIMIT = 60
-AGENT_CHAT_TIMEOUT_SECS = 90
+# An answer may look things up first (a few tool rounds), so allow more than one model call.
+AGENT_CHAT_TIMEOUT_SECS = 150
+AGENT_BRIEF_RETRY_SECS = 600  # provider not set up: check again in 10 minutes
 AGENT_SWITCH_USAGE = "Usage: /agent <ollama|openai|anthropic|claude|gemma4_mlx> [model]"
 
 
@@ -163,6 +165,131 @@ class AgentChatMixin:
             })
         except Exception:
             pass
+
+    # ── what the analyst always knows: watchlist, holdings, trades, strategy ──
+    def _install_agent_context_provider(self) -> None:
+        from backend.agents import user_context
+
+        user_context.set_provider(self._agent_user_context)
+
+    def _agent_user_context(self) -> dict:
+        """The user's own context from the terminal's in-memory state (no network).
+        Runs in worker threads; reads cached copies only."""
+        from backend.agents import user_context
+
+        watch = [
+            str(e.get("symbol") or e.get("label") or "").upper()
+            for e in list(getattr(self, "_paper_watchlist", None) or [])
+            if isinstance(e, dict) and str(e.get("kind") or "stock") == "stock"
+        ]
+        book = getattr(self, "_website_book", None)
+        if book is not None:
+            holdings = [
+                {"symbol": p.get("symbol"), "qty": p.get("quantity"), "avg_cost": p.get("avg_cost"),
+                 "last": p.get("last"), "return_pct": p.get("return_pct")}
+                for p in (book.positions() if book.loaded else [])
+            ]
+            try:
+                trades = user_context.trades_from_frame(book.trade_log_frame())
+            except Exception:
+                trades = []
+            strategy = None
+            strategies = getattr(self, "_website_strategies", None)
+            assigned = strategies.assigned_strategy() if strategies is not None else None
+            if assigned:
+                picks = strategies.cached_picks(assigned.get("id"))
+                strategy = {
+                    "name": assigned.get("name") or assigned.get("id"),
+                    "kind": assigned.get("kind"),
+                    "as_of": picks.as_of if picks else None,
+                    "picks": [dict(r) for r in (picks.rows if picks else [])][:8],
+                }
+            return {
+                "linked": True,
+                "account": "nepsequant.com paper book",
+                "terminal_watchlist": watch,
+                "holdings": holdings,
+                "trades": trades,
+                "strategy": strategy,
+            }
+        from apps.tui.io.persistence import _load_trade_log
+        from backend.agents.agent_analyst import _load_active_portfolio
+
+        rows, meta = _load_active_portfolio()
+        try:
+            trades = user_context.trades_from_frame(_load_trade_log())
+        except Exception:
+            trades = []
+        return {
+            "linked": False,
+            "account": str(meta.get("name") or meta.get("id") or "local paper account"),
+            "terminal_watchlist": watch,
+            "holdings": [{"symbol": r["symbol"], "qty": r["qty"], "avg_cost": r.get("entry")} for r in rows],
+            "trades": trades,
+            "strategy": None,
+        }
+
+    # ── the automatic brief ──────────────────────────────────────────────────
+    def _agent_proactive_tick(self) -> None:
+        """Every minute: post a brief if one is due for this window (cheap check)."""
+        from backend.agents import proactive
+        from backend.quant_pro.nepse_calendar import current_nepal_datetime
+
+        if getattr(self, "_agent_brief_running", False) or getattr(self, "_agent_chat_busy", False):
+            return
+        if time.time() < float(getattr(self, "_agent_brief_skip_until", 0.0) or 0.0):
+            return
+        try:
+            window = proactive.due_window(current_nepal_datetime(), proactive.load_state())
+        except Exception:
+            return
+        if window:
+            self._run_agent_brief(window, manual=False)
+
+    @work(thread=True, group="agent-brief")
+    def _run_agent_brief(self, window: Optional[str] = None, manual: bool = False) -> None:
+        from backend.agents import proactive
+        from backend.quant_pro.nepse_calendar import current_nepal_datetime
+
+        if getattr(self, "_agent_brief_running", False):
+            if manual:
+                self.call_from_thread(self._set_status, "A brief is already being prepared")
+            return
+        self._agent_brief_running = True
+        try:
+            ready, why = proactive.provider_ready()
+            if not ready:
+                if manual:
+                    self.call_from_thread(self._append_chat_note, f"A brief needs an AI provider: {why}.")
+                else:
+                    self._agent_brief_skip_until = time.time() + AGENT_BRIEF_RETRY_SECS
+                return
+            now = current_nepal_datetime()
+            window = window or proactive.current_window(now)
+            self._sync_agent_account_context_env()
+            label = proactive.WINDOW_LABEL.get(window, window)
+            self.call_from_thread(self._set_status, f"⧖ Agent preparing the {label} brief... ({self._agent_header_label()})")
+            result = proactive.run_brief(window, now=now)
+            provider = self._current_agent_provider_label()
+            text = str(result.get("text") or "")
+            if result.get("ok"):
+                append_external_agent_chat_message("AGENT", text, source="proactive_brief", provider=provider)
+                proactive.mark_done(now.date(), window, text=text)
+                self.call_from_thread(self._append_chat, "AGENT", text, PURPLE, keep_lines=True)
+                self.call_from_thread(self._set_status, f"Brief posted ({label}) │ {self._agent_header_label()} │ /proactive off to stop automatic briefs")
+                return
+            # failed: say so once and do not retry this window automatically
+            proactive.mark_done(now.date(), window)
+            if manual:
+                append_external_agent_chat_message("AGENT", text, source="proactive_brief", provider=provider)
+                self.call_from_thread(self._append_chat, "AGENT", text, LOSS_HI)
+            else:
+                self.call_from_thread(self._append_chat_note, f"Automatic brief skipped: {_error_line(text)}")
+            self.call_from_thread(self._set_status, _error_line(text))
+        except Exception as exc:
+            self.call_from_thread(self._set_status, f"Brief error: {exc}")
+        finally:
+            self._agent_brief_running = False
 
     def _current_agent_provider_label(self) -> str:
         try:
@@ -326,6 +453,7 @@ class AgentChatMixin:
                 color,
                 ts=item.get("ts"),
                 provider=item.get("provider"),
+                keep_lines=str(item.get("message") or "").startswith("BRIEF ·"),
             )
         if bool(getattr(self, "_agent_typing_visible", False)):
             self._animate_agent_typing()
@@ -483,6 +611,8 @@ class AgentChatMixin:
         status = f"Agent responded │ {self._agent_header_label()}"
         if info.get("seconds"):
             status += f" │ {float(info['seconds']):.1f}s"
+        if info.get("tool_calls"):
+            status += f" │ {int(info['tool_calls'])} lookup{'s' if int(info['tool_calls']) != 1 else ''}"
         if info.get("notice"):
             status += f" │ {info['notice']}"
         self.call_from_thread(self._set_status, status)
@@ -716,13 +846,15 @@ class AgentChatMixin:
         *,
         ts: float | None = None,
         provider: str | None = None,
+        keep_lines: bool = False,
     ):
         scroll = self.query_one("#agent-chat-scroll", VerticalScroll)
         self._detach_agent_typing_widget()
         css_class = "chat-user" if role == "YOU" else "chat-agent"
         label = "YOU" if role == "YOU" else "AGENT" if role == "AGENT" else role.upper()
         ts_text = _format_nst_hm(ts)
-        flat_message = " ".join(part.strip() for part in str(message or "").splitlines() if part.strip())
+        joiner = "\n" if keep_lines else " "  # a brief keeps its section lines
+        flat_message = joiner.join(part.strip() for part in str(message or "").splitlines() if part.strip())
         if not flat_message:
             flat_message = "—"
         prefix = f"[{label}]"
@@ -816,9 +948,32 @@ class AgentChatMixin:
             except Exception as exc:
                 self._set_status(f"Model update failed: {exc}")
                 return True
+        if command in {"/brief", "/brief now"}:
+            self._append_chat_note("Preparing a brief: your names, news-linked movers, names worth researching.")
+            self._run_agent_brief(None, manual=True)
+            return True
+        if command.startswith("/proactive"):
+            from backend.agents import proactive
+
+            arg = command[len("/proactive"):].strip()
+            if arg in {"on", "off"}:
+                proactive.set_enabled(arg == "on")
+                self._agent_brief_skip_until = 0.0
+            enabled = proactive.proactive_enabled()
+            text = (
+                "Automatic briefs are ON: once a day, and on trading days at pre-open (10:30), mid-session (13:00) "
+                "and after the close (15:15 NPT). /proactive off to stop, /brief for one now."
+                if enabled
+                else "Automatic briefs are OFF. /proactive on to turn them back on, /brief for one now."
+            )
+            if arg not in {"", "on", "off", "status"}:
+                text = "Usage: /proactive on|off|status"
+            self._append_chat_note(text)
+            self._set_status(text)
+            return True
         if command == "/help":
             self._set_status(
-                "Agent commands: /agent, /agent list, /agent ollama|openai|anthropic|claude|gemma4_mlx [model], "
+                "Agent commands: /brief, /proactive on|off, /agent, /agent list, /agent ollama|openai|anthropic|claude|gemma4_mlx [model], "
                 "/model <name>, /history, /recent, /clear, /stop"
             )
             return True

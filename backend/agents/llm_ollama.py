@@ -5,6 +5,11 @@ Uses ``POST /api/chat`` with system + user messages. Before calling, it checks
 installed chat model and says so; with no models at all it says which one to
 pull. Host: ``OLLAMA_HOST``, else the terminal's agent config, else
 http://localhost:11434.
+
+``call_ollama_tools`` offers the analyst's read-only lookups to models that
+support tool calling. A model that does not (Ollama answers 400 "does not
+support tools") is remembered and gets ``NO_TOOLS`` back, so the analyst can
+fall back to pre-fetched data in the prompt.
 """
 
 from __future__ import annotations
@@ -31,6 +36,8 @@ CONTEXT_STEPS = (4096, 8192, 16384, 32768)
 
 _TAGS: dict[str, tuple[float, list[str]]] = {}
 _TAGS_LOCK = threading.Lock()
+NO_TOOLS = "NO_TOOLS: this model cannot call tools"
+_NO_TOOL_MODELS: set[str] = set()
 _LAST: dict[str, Any] = {}
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S | re.I)
 
@@ -140,6 +147,66 @@ def build_request(
     }
 
 
+def _chat(
+    host: str,
+    body: dict[str, Any],
+    *,
+    chosen: str,
+    purpose: str,
+    urlopen: Optional[Callable[..., Any]],
+) -> tuple[Optional[dict], str, str]:
+    """(reply, "", "") or (None, error line, raw error detail)."""
+    request = urllib.request.Request(
+        f"{host}/api/chat",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    wait = TIMEOUTS_S.get(purpose, TIMEOUTS_S["chat"])
+    opener = urlopen or urllib.request.urlopen
+    try:
+        with opener(request, timeout=wait) as response:
+            return json.loads(response.read().decode("utf-8")), "", ""
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = str(json.loads(exc.read().decode("utf-8")).get("error") or "")
+        except Exception:
+            detail = ""
+        if exc.code == 404:
+            with _TAGS_LOCK:
+                _TAGS.pop(host, None)
+            return None, f"ERROR: Ollama has no model '{chosen}'. Run: ollama pull {chosen}   or pick another with /model <name>.", detail
+        return None, f"ERROR: Ollama answered with an error ({exc.code}){': ' + ' '.join(detail.split())[:160] if detail else ''}.", detail
+    except (TimeoutError, socket.timeout):
+        return None, f"ERROR: Ollama did not answer within {int(wait)}s. Try a smaller model (/model {SUGGESTED_MODEL}) or a shorter question.", ""
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            return None, f"ERROR: Ollama did not answer within {int(wait)}s. Try a smaller model (/model {SUGGESTED_MODEL}) or a shorter question.", ""
+        return None, not_running_message(host), ""
+    except ValueError:
+        return None, "ERROR: Ollama sent a reply that is not JSON.", ""
+
+
+def _resolve(host: str, model: str, urlopen: Optional[Callable[..., Any]]) -> tuple[str, str]:
+    """(chosen model, "") or ("", error line)."""
+    _LAST.clear()
+    _LAST.update({"host": host, "configured_model": model, "model": model, "notice": ""})
+    try:
+        installed = installed_models(host, urlopen=urlopen)
+    except OllamaUnavailable:
+        return "", not_running_message(host)
+    chosen, notice = resolve_model(model, installed)
+    if not chosen:
+        return "", no_models_message()
+    _LAST.update({"model": chosen, "notice": notice})
+    return chosen, ""
+
+
+def _text(data: dict) -> str:
+    text = str(dict(data.get("message") or {}).get("content") or "")
+    return _THINK_BLOCK.sub("", text).strip()
+
+
 def call_ollama(
     prompt: str,
     *,
@@ -154,48 +221,14 @@ def call_ollama(
 ) -> str:
     """One answer from a local model, or a one-line ``ERROR: ...`` saying what to do."""
     host = ollama_host(host)
-    _LAST.clear()
-    _LAST.update({"host": host, "configured_model": model, "model": model, "notice": ""})
-    try:
-        installed = installed_models(host, urlopen=urlopen)
-    except OllamaUnavailable:
-        return not_running_message(host)
-    chosen, notice = resolve_model(model, installed)
-    if not chosen:
-        return no_models_message()
-    _LAST.update({"model": chosen, "notice": notice})
-
+    chosen, error = _resolve(host, model, urlopen)
+    if error:
+        return error
     body = build_request(prompt, system=system, model=chosen, max_tokens=max_tokens, history=history, temperature=temperature)
-    request = urllib.request.Request(
-        f"{host}/api/chat",
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    wait = TIMEOUTS_S.get(purpose, TIMEOUTS_S["chat"])
-    opener = urlopen or urllib.request.urlopen
     started = time.monotonic()
-    try:
-        with opener(request, timeout=wait) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        try:
-            detail = str(json.loads(exc.read().decode("utf-8")).get("error") or "")
-        except Exception:
-            detail = ""
-        if exc.code == 404:
-            with _TAGS_LOCK:
-                _TAGS.pop(host, None)
-            return f"ERROR: Ollama has no model '{chosen}'. Run: ollama pull {chosen}   or pick another with /model <name>."
-        return f"ERROR: Ollama answered with an error ({exc.code}){': ' + ' '.join(detail.split())[:160] if detail else ''}."
-    except (TimeoutError, socket.timeout):
-        return f"ERROR: Ollama did not answer within {int(wait)}s. Try a smaller model (/model {SUGGESTED_MODEL}) or a shorter question."
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
-            return f"ERROR: Ollama did not answer within {int(wait)}s. Try a smaller model (/model {SUGGESTED_MODEL}) or a shorter question."
-        return not_running_message(host)
-    except ValueError:
-        return "ERROR: Ollama sent a reply that is not JSON."
+    data, error, _detail = _chat(host, body, chosen=chosen, purpose=purpose, urlopen=urlopen)
+    if error:
+        return error
     _LAST.update(
         {
             "seconds": round(time.monotonic() - started, 2),
@@ -204,6 +237,75 @@ def call_ollama(
             "num_ctx": body["options"]["num_ctx"],
         }
     )
-    text = str(dict(data.get("message") or {}).get("content") or "")
-    text = _THINK_BLOCK.sub("", text).strip()
-    return text or "ERROR: Ollama returned an empty answer. Try again, or another model with /model <name>."
+    return _text(data) or "ERROR: Ollama returned an empty answer. Try again, or another model with /model <name>."
+
+
+def supports_tools(model: str) -> bool:
+    """False once Ollama has said this model cannot call tools."""
+    return _canonical(model) not in _NO_TOOL_MODELS
+
+
+def call_ollama_tools(
+    prompt: str,
+    *,
+    system: str,
+    max_tokens: int,
+    model: str,
+    session: Any,
+    host: str = "",
+    purpose: str = "chat",
+    history: Optional[list[dict]] = None,
+    temperature: float = 0.15,
+    urlopen: Optional[Callable[..., Any]] = None,
+    max_rounds: int = 3,
+    deadline_s: float = 90.0,
+) -> str:
+    """An answer that may look things up first, for models with tool calling.
+    Returns ``NO_TOOLS`` when the model cannot call tools (nothing was answered)."""
+    host = ollama_host(host)
+    chosen, error = _resolve(host, model, urlopen)
+    if error:
+        return error
+    if not supports_tools(chosen):
+        return NO_TOOLS
+    body = build_request(prompt, system=system, model=chosen, max_tokens=max_tokens, history=history, temperature=temperature)
+    tools = [{"type": "function", "function": {"name": t["function"]["name"], "description": t["function"]["description"],
+                                               "parameters": t["function"]["parameters"]}} for t in session.openai_tools()]
+    started = time.monotonic()
+    rounds = 0
+    totals = {"input_tokens": 0, "output_tokens": 0}
+    data: dict = {}
+    while True:
+        final = rounds >= max_rounds or session.exhausted or (time.monotonic() - started) > deadline_s
+        if final:
+            body.pop("tools", None)  # Ollama has no tool_choice: the last request offers none
+        else:
+            body["tools"] = tools
+        body["options"]["num_ctx"] = context_window(*(str(m.get("content") or "") for m in body["messages"]), max_tokens=max_tokens)
+        data, error, detail = _chat(host, body, chosen=chosen, purpose=purpose, urlopen=urlopen)
+        if error:
+            if rounds == 0 and "support tools" in detail.lower():
+                _NO_TOOL_MODELS.add(_canonical(chosen))
+                return NO_TOOLS
+            return error
+        totals["input_tokens"] += int(data.get("prompt_eval_count") or 0)
+        totals["output_tokens"] += int(data.get("eval_count") or 0)
+        message = dict(data.get("message") or {})
+        calls = [c for c in list(message.get("tool_calls") or []) if isinstance(c, dict)]
+        if not calls or final:
+            break
+        rounds += 1
+        body["messages"].append({"role": "assistant", "content": str(message.get("content") or ""), "tool_calls": calls})
+        for call in calls:
+            fn = dict(call.get("function") or {})
+            text, _is_error = session.run(fn.get("name"), fn.get("arguments"))
+            body["messages"].append({"role": "tool", "content": text, "tool_name": str(fn.get("name") or "")})
+    _LAST.update(
+        {
+            **totals,
+            "seconds": round(time.monotonic() - started, 2),
+            "num_ctx": body["options"]["num_ctx"],
+            "requests": rounds + 1,
+        }
+    )
+    return _text(data) or "ERROR: Ollama returned an empty answer. Try again, or another model with /model <name>."

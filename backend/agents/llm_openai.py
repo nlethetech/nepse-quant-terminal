@@ -109,28 +109,33 @@ def last_usage() -> dict[str, Any]:
     return dict(_LAST_USAGE)
 
 
-def call_openai(
-    prompt: str,
+def _usage_from(data: Any, model: str) -> dict[str, Any]:
+    usage = dict(data.get("usage") or {}) if isinstance(data, dict) else {}
+    return {
+        "model": str(data.get("model") or model) if isinstance(data, dict) else model,
+        "input_tokens": usage.get("prompt_tokens"),
+        "cached_input_tokens": dict(usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
+        "output_tokens": usage.get("completion_tokens"),
+    }
+
+
+def _post(
+    body: dict[str, Any],
     *,
-    system: str,
-    max_tokens: int,
-    purpose: str = "chat",
-    history: Optional[list[dict]] = None,
-    model: Optional[str] = None,
-    timeout: Optional[float] = None,
-    urlopen: Optional[Callable[..., Any]] = None,
-) -> str:
-    """One answer from the model, or a one-line ``ERROR: ...`` saying what to do."""
-    model = str(model or DEFAULT_OPENAI_MODEL).strip()
+    model: str,
+    purpose: str,
+    timeout: Optional[float],
+    urlopen: Optional[Callable[..., Any]],
+) -> tuple[Optional[dict], str]:
+    """(reply JSON, "") or (None, one-line ``ERROR: ...``)."""
     key, _source = get_api_key("openai")
     if not key:
-        return "ERROR: No OpenAI API key. Run ./nqt-connect ai setup (or set OPENAI_API_KEY), or switch with /agent ollama."
+        return None, "ERROR: No OpenAI API key. Run ./nqt-connect ai setup (or set OPENAI_API_KEY), or switch with /agent ollama."
     try:
         url = base_url()
     except ValueError as exc:
-        return f"ERROR: {exc}"
+        return None, f"ERROR: {exc}"
     who = _who(url)
-    body = build_request(prompt, system=system, model=model, max_tokens=max_tokens, purpose=purpose, history=history)
     request = urllib.request.Request(
         url + "/chat/completions",
         data=json.dumps(body).encode("utf-8"),
@@ -149,43 +154,127 @@ def call_openai(
         opener = open_keyed
     else:
         opener = urlopen
-    started = time.monotonic()
     try:
         with opener(request, timeout=wait) as response:  # noqa: S310 - scheme checked in base_url
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return redact_keys(http_error_message(exc, model=model, who=who))
+        return None, redact_keys(http_error_message(exc, model=model, who=who))
     except (TimeoutError, socket.timeout):
-        return f"ERROR: {who} did not answer within {int(wait)}s. Try again, or ask a shorter question."
+        return None, f"ERROR: {who} did not answer within {int(wait)}s. Try again, or ask a shorter question."
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, (TimeoutError, socket.timeout)):
-            return f"ERROR: {who} did not answer within {int(wait)}s. Try again, or ask a shorter question."
-        return f"ERROR: Could not reach {who}. Check your internet connection."
+            return None, f"ERROR: {who} did not answer within {int(wait)}s. Try again, or ask a shorter question."
+        return None, f"ERROR: Could not reach {who}. Check your internet connection."
     except ValueError:
-        return f"ERROR: {who} sent a reply that is not JSON."
+        return None, f"ERROR: {who} sent a reply that is not JSON."
+    return (data if isinstance(data, dict) else {}), ""
 
-    choices = data.get("choices") if isinstance(data, dict) else None
-    choice = dict((choices or [{}])[0] or {})
-    message = dict(choice.get("message") or {})
+
+def _message_text(message: dict) -> str:
     content = message.get("content") or ""
     if isinstance(content, list):  # some compatible servers send content parts
         content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
-    text = str(content).strip()
-    usage = dict(data.get("usage") or {}) if isinstance(data, dict) else {}
-    _LAST_USAGE.clear()
-    _LAST_USAGE.update(
-        {
-            "model": str(data.get("model") or model) if isinstance(data, dict) else model,
-            "input_tokens": usage.get("prompt_tokens"),
-            "cached_input_tokens": dict(usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
-            "output_tokens": usage.get("completion_tokens"),
-            "seconds": round(time.monotonic() - started, 2),
-        }
-    )
+    return str(content).strip()
+
+
+def _final_text(data: dict, choice: dict, message: dict) -> str:
+    text = _message_text(message)
     if text:
         return text
+    who = _who(base_url())
     if message.get("refusal"):
         return f"ERROR: The model declined: {' '.join(str(message['refusal']).split())[:200]}"
     if choice.get("finish_reason") == "length":
         return "ERROR: The model used its whole token allowance before answering. Ask a narrower question, or try another model with /model."
     return f"ERROR: {who} returned an empty answer."
+
+
+def call_openai(
+    prompt: str,
+    *,
+    system: str,
+    max_tokens: int,
+    purpose: str = "chat",
+    history: Optional[list[dict]] = None,
+    model: Optional[str] = None,
+    timeout: Optional[float] = None,
+    urlopen: Optional[Callable[..., Any]] = None,
+) -> str:
+    """One answer from the model, or a one-line ``ERROR: ...`` saying what to do."""
+    model = str(model or DEFAULT_OPENAI_MODEL).strip()
+    body = build_request(prompt, system=system, model=model, max_tokens=max_tokens, purpose=purpose, history=history)
+    started = time.monotonic()
+    data, error = _post(body, model=model, purpose=purpose, timeout=timeout, urlopen=urlopen)
+    if error:
+        return error
+    choices = data.get("choices")
+    choice = dict((choices or [{}])[0] or {})
+    message = dict(choice.get("message") or {})
+    _LAST_USAGE.clear()
+    _LAST_USAGE.update(_usage_from(data, model))
+    _LAST_USAGE["seconds"] = round(time.monotonic() - started, 2)
+    return _final_text(data, choice, message)
+
+
+def call_openai_tools(
+    prompt: str,
+    *,
+    system: str,
+    max_tokens: int,
+    session: Any,
+    purpose: str = "chat",
+    history: Optional[list[dict]] = None,
+    model: Optional[str] = None,
+    timeout: Optional[float] = None,
+    urlopen: Optional[Callable[..., Any]] = None,
+    max_rounds: int = 4,
+    deadline_s: float = 60.0,
+) -> str:
+    """An answer that may look things up first (Chat Completions function tools).
+
+    ``session`` is an agent_tools.ToolSession: it runs each requested tool and
+    enforces the per-answer cap. After ``max_rounds`` tool rounds, the cap, or
+    ``deadline_s`` seconds, the model is asked to answer with tools switched off
+    (``tool_choice: "none"``). Every requested call gets a reply, even refused ones."""
+    model = str(model or DEFAULT_OPENAI_MODEL).strip()
+    body = build_request(prompt, system=system, model=model, max_tokens=max_tokens, purpose=purpose, history=history)
+    body["tools"] = session.openai_tools()
+    body["tool_choice"] = "auto"
+    started = time.monotonic()
+    totals = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
+    rounds = 0
+    data: dict = {}
+    while True:
+        final = rounds >= max_rounds or session.exhausted or (time.monotonic() - started) > deadline_s
+        if final:
+            body["tool_choice"] = "none"
+        data, error = _post(body, model=model, purpose=purpose, timeout=timeout, urlopen=urlopen)
+        if error:
+            return error
+        usage = _usage_from(data, model)
+        for k in totals:
+            totals[k] += int(usage.get(k) or 0)
+        choices = data.get("choices")
+        choice = dict((choices or [{}])[0] or {})
+        message = dict(choice.get("message") or {})
+        calls = [c for c in list(message.get("tool_calls") or []) if isinstance(c, dict)]
+        if not calls or final:
+            break
+        rounds += 1
+        body["messages"].append(
+            {"role": "assistant", "content": message.get("content") or None, "tool_calls": calls}
+        )
+        for call in calls:
+            fn = dict(call.get("function") or {})
+            text, _is_error = session.run(fn.get("name"), fn.get("arguments"))
+            body["messages"].append({"role": "tool", "tool_call_id": str(call.get("id") or ""), "content": text})
+    _LAST_USAGE.clear()
+    _LAST_USAGE.update(
+        {
+            "model": str(data.get("model") or model),
+            **totals,
+            "requests": rounds + 1,
+            "seconds": round(time.monotonic() - started, 2),
+        }
+    )
+    return _final_text(data, choice, message)

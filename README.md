@@ -362,6 +362,9 @@ Switch any time in the Agents tab (key 5): `/agent openai`, `/agent anthropic cl
 - **Costs are on your own key.** Each chat answer and each picks analysis is one request to your provider. The terminal keeps requests small (last few chat turns only, trimmed context, capped answer length, cached system prompt) and reuses a fresh analysis instead of re-running it.
 - **Keys stay on your computer**, in `~/.config/nepse-quant-terminal/ai.json` (owner-only permissions), and are sent only to the provider they belong to. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` environment variables take priority. Never paste a key into the chat box: the terminal refuses anything that looks like a key, because chat history is saved to disk.
 - **NEPSE Quant data:** when the terminal is linked (`./nqt-connect login`), the analyst also reads your account's market briefing from nepsequant.com (market phase, NEPSE close, regime, breadth, top movers, latest news with sources, disclosures), refreshed every five minutes, and can cite it. Not linked or offline: it simply works without it.
+- **It knows your context.** Every answer sees your watchlist (the terminal's, plus your nepsequant.com watchlist when linked), the holdings and recent trades of the paper book in use, and your assigned strategy with today's picks. "Research my watchlist" just works; it never asks for tickers it already has.
+- **It can look things up while it answers** (OpenAI, Claude, and Ollama models with tool calling): price and key-facts snapshot for up to 20 names, up to 120 sessions of price history, a company's news and filings, the day's movers with the news behind them, and your own watchlist, holdings and trades. Read-only (nothing can place an order), at most 6 lookups per answer; linked, the lookups come from nepsequant.com, otherwise from your local market database. Models without tool calling get the same data fetched up front. `NQT_AGENT_TOOLS=0` turns lookups off.
+- **Automatic briefs.** With a provider set up, the analyst posts a short brief into the chat once a day, and on trading days at pre-open (10:30), mid-session (13:00) and after the close (15:15 NPT): what moved in your names and why, stocks that moved on news and how they may react, and a few names worth researching from your own history. One model call per brief, never repeated for the same window. `/brief` runs one now; `/proactive off` (or `NQT_AGENT_PROACTIVE=0`) stops the automatic ones.
 - Same rules everywhere: paper trading only, the same analyst rules and verdict format, and the trade-approval veto. `OPENAI_BASE_URL` points `openai` at any OpenAI-compatible server; `OLLAMA_HOST` points `ollama` at another machine.
 
 ### Option 1 — Ollama (recommended, any hardware)
@@ -490,6 +493,8 @@ All backends are hot-swappable without restarting the terminal. In the Agents ta
 /agent gemma4_mlx
 /agent claude
 /model qwen2
+/brief            # a brief now: your names, news-linked movers, names worth researching
+/proactive off    # stop the automatic briefs (/proactive on to restart)
 ```
 
 The setting persists to `data/runtime/agents/active_agent.json`.
