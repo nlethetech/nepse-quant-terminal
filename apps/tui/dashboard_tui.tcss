@@ -835,12 +835,24 @@ DataTable > .datatable--odd-row {
 }
 
 #lookup-stats {
-    height: 8;
+    height: 9;
     width: 100%;
     padding: 0 1;
     background: #11151b;
     color: #d8e4f2;
     border-bottom: solid #4b5560;
+}
+
+#lookup-related-title {
+    height: 1;
+    background: #2a2213;
+    color: #f2b94b;
+    padding: 0 1;
+}
+
+#dt-lookup-related {
+    height: auto;
+    max-height: 14;
 }
 
 #lookup-report {
@@ -885,7 +897,7 @@ DataTable > .datatable--odd-row {
 }
 
 #lookup-intel-title {
-    height: 1;
+    height: 2;
     background: #2a2213;
     color: #f2b94b;
     padding: 0 1;

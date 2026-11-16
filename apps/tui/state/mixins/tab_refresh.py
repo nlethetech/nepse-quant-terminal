@@ -70,7 +70,9 @@ from apps.tui.render.text_blocks import (
     _render_lookup_intelligence,
     _render_stock_report,
 )
-from apps.tui.render.charts import _render_candlestick_chart, _render_sparkline
+from apps.tui.render.charts import _render_candlestick_chart, _render_sparkline  # noqa: F401 (re-export seam)
+from apps.tui.render.lookup_page import build_payload as _lookup_web_payload
+from apps.tui.render.volume_chart import render_volume_chart as _render_volume_chart
 from apps.tui.io.stats import (
     _compute_account_portfolio_stats,
     _compute_portfolio_stats,
@@ -2440,7 +2442,10 @@ class TabRefreshMixin:
         if not sym:
             return
         tf = self.lookup_tf
-        cache_key = (sym, tf, self._data_version())
+        version = self._data_version()
+        if getattr(self, "_website_lookup", None) is not None and tf != "I":
+            version = f"web-{int(time.time() // 300)}"  # nepsequant.com's page, refreshed every 5 minutes
+        cache_key = (sym, tf, version)
         self._lookup_request_key = cache_key
         if cache_key in self._lookup_cache:
             self._render_lookup_payload(cache_key, self._lookup_cache[cache_key])
@@ -2464,7 +2469,8 @@ class TabRefreshMixin:
         self.query_one("#lookup-intel", Static).update(Text("  Loading intelligence...", style=LABEL))
         self.query_one("#lookup-fin-title", Static).update(f"QUARTERLY FINANCIALS — {sym}")
         self.query_one("#lookup-ca-title", Static).update(f"CORPORATE ACTIONS — {sym}")
-        for table_id in ("#dt-lookup", "#dt-lookup-fin", "#dt-lookup-ca"):
+        self.query_one("#lookup-related-title", Static).update("")
+        for table_id in ("#dt-lookup", "#dt-lookup-fin", "#dt-lookup-ca", "#dt-lookup-related"):
             self.query_one(table_id, DataTable).clear(columns=True)
     @work(thread=True)
     def _load_lookup_async(
@@ -2476,6 +2482,25 @@ class TabRefreshMixin:
         pane_height: int,
     ) -> None:
         cache_key = (sym, tf, data_version)
+        web = getattr(self, "_website_lookup", None)
+        web_note = ""
+        if web is not None and tf != "I":
+            from apps.cli import connect
+
+            try:
+                data = web.get(sym, timeframe=tf)
+                payload = _lookup_web_payload(sym, tf, data, width=max(60, pane_width - 2),
+                                              height=max(10, pane_height - 1))
+                self.call_from_thread(self._render_lookup_payload, cache_key, payload)
+                return
+            except connect.ConnectError as exc:
+                if "not a listed" in str(exc) or "No price history" in str(exc):
+                    self.call_from_thread(self._render_lookup_payload, cache_key,
+                                          {"found": False, "sym": sym, "error": str(exc)})
+                    return
+                web_note = f"  (nepsequant.com: {str(exc)[:80]} — showing this computer's data)"
+            except Exception as exc:  # a malformed reply: fall back to local data
+                web_note = f"  (nepsequant.com page unreadable: {str(exc)[:60]} — showing this computer's data)"
         try:
             min_sessions = 2 if tf in {"D", "I"} else {"W": 10, "M": 18, "Y": 24}.get(tf, 2)
             _ensure_lookup_history(sym, min_sessions=min_sessions)
@@ -2527,7 +2552,7 @@ class TabRefreshMixin:
             title = (
                 f"LOOKUP: {sym}  —  {tf_labels.get(tf, 'Daily')}  "
                 f"({n_sessions} {count_label})  —  "
-                f"D/W/M/Y/I to switch  —  Press L to change{intraday_note}"
+                f"D/W/M/Y/I to switch  —  Press L to change{intraday_note}{web_note}"
             )
             header = Text.assemble(
                 (f"  {sym}  ", f"bold {CYAN}"),
@@ -2539,10 +2564,14 @@ class TabRefreshMixin:
 
             try:
                 chart_rows = _resample_ohlcv(chart_source, tf).sort_values("date").reset_index(drop=True)
-                ideal_width = 18 + max(12, len(chart_rows)) * 3
-                cw = max(60, min(pane_width - 2, ideal_width))
-                ch_h = max(12, pane_height - 1)
-                chart = _render_candlestick_chart(chart_source, width=cw, height=ch_h, timeframe=tf)
+                chart = _render_volume_chart(
+                    [str(d)[:16 if tf == "I" else 10] for d in chart_rows["date"]],
+                    [float(x) for x in chart_rows["close"]],
+                    [float(x or 0) for x in chart_rows["volume"]],
+                    width=max(60, pane_width - 2), height=max(10, pane_height - 1),
+                    unit="rupees" if sym == "NEPSE" or sym.startswith("NEPSE_") else "shares",
+                    label="bars" if tf == "I" else "sessions" if tf == "D" else {"W": "weeks", "M": "months", "Y": "years"}.get(tf, "sessions"),
+                )
             except Exception as e:
                 chart = Text(f"  Chart error: {e}", style=LABEL)
 
@@ -2605,8 +2634,12 @@ class TabRefreshMixin:
                 fin_cols = [("STATUS", "status")]
                 fin_rows = [[_dim_text("Financial report unavailable")]]
 
-            intel_title = f"CORPORATE INTELLIGENCE — {sym}"
-            intel = _render_lookup_intelligence(fin_report, sym)
+            intel_title = "MORE FROM NEPSEQUANT.COM"
+            intel = Text(
+                "  Link this terminal to nepsequant.com to see related stocks, quarterly results,\n"
+                "  news, exchange filings and broker flow here:  ./nqt-connect login",
+                style=LABEL,
+            )
 
             tf_col_label = {"D": "DATE", "W": "WEEK", "M": "MONTH", "Y": "YEAR", "I": "TIME"}
             ohlcv_title = f"OHLCV — {sym} ({tf_labels.get(tf, 'Daily')})"
@@ -2704,6 +2737,12 @@ class TabRefreshMixin:
 
         if not payload.get("found"):
             sym = payload.get("sym", self.lookup_sym)
+            try:
+                self.query_one("#lookup-related-title", Static).update("")
+                self.query_one("#dt-lookup-related", DataTable).clear(columns=True)
+                self._lookup_related_syms = []
+            except Exception:
+                pass
             title_w.update(f"LOOKUP: {sym} — NOT FOUND")
             header_w.update("")
             chart_w.update("")
@@ -2717,6 +2756,18 @@ class TabRefreshMixin:
             intel_title.update("")
             intel_w.update("")
             return
+
+        rel_title = self.query_one("#lookup-related-title", Static)
+        rel_dt = self.query_one("#dt-lookup-related", DataTable)
+        rel_dt.clear(columns=True)
+        rel_title.update(payload.get("related_title") or "")
+        rel_dt.display = bool(payload.get("related_rows"))
+        rel_title.display = bool(payload.get("related_title"))
+        self._lookup_related_syms = list(payload.get("related_syms") or [])
+        for label, key in payload.get("related_cols") or []:
+            rel_dt.add_column(label, key=key)
+        for row in payload.get("related_rows") or []:
+            rel_dt.add_row(*row)
 
         title_w.update(payload["title"])
         header_w.update(payload["header"])
@@ -2741,6 +2792,8 @@ class TabRefreshMixin:
             fin_dt.add_row(*row)
 
         ca_title.update(payload["ca_title"])
+        ca_title.display = bool(payload["ca_title"])
+        intel_title.display = bool(payload["intel_title"])
         ca_dt.clear(columns=True)
         if payload["ca_rows"]:
             for label, key in payload["ca_cols"]:

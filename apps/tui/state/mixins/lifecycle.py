@@ -107,6 +107,10 @@ class LifecycleMixin:
         # Linked: the broker panels come from nepsequant.com's floorsheet too.
         from apps.tui.io.website_floor import WebsiteFloor
         self._website_floor = WebsiteFloor.from_book(self._website_book)
+        # Linked: the Lookup tab shows nepsequant.com's page for a stock
+        # (history, facts, related stocks, results, news, broker flow).
+        from apps.tui.io.website_lookup import WebsiteLookup
+        self._website_lookup = WebsiteLookup.from_book(self._website_book) or WebsiteLookup.from_saved()
         self._init_website_strategies()
         self._build_ticker()
         self._update_header()

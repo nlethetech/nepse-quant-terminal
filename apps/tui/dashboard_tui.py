@@ -533,6 +533,8 @@ class NepseDashboard(
                         yield DataTable(id="dt-lookup", zebra_stripes=True, cursor_type="row")
                     with VerticalScroll(id="lookup-summary-pane"):
                         yield Static("", id="lookup-stats")
+                        yield Static("", id="lookup-related-title")
+                        yield DataTable(id="dt-lookup-related", zebra_stripes=True, cursor_type="row")
                         yield Static("", id="lookup-report")
                     with VerticalScroll(id="lookup-side-pane"):
                         yield Static("", id="lookup-fin-title")

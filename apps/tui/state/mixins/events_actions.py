@@ -96,6 +96,14 @@ class EventsActionsMixin:
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection across tabs."""
+        # Lookup: Enter on a related stock (or a mover) → look that one up
+        if event.data_table.id == "dt-lookup-related":
+            syms = getattr(self, "_lookup_related_syms", [])
+            idx = event.cursor_row
+            if 0 <= idx < len(syms) and syms[idx] and syms[idx] != str(self.lookup_sym or "").upper():
+                self.lookup_sym = syms[idx]
+                self._populate_lookup()
+            return
         # Watchlist: Enter → lookup
         if event.data_table.id == "dt-watchlist":
             idx = event.cursor_row
