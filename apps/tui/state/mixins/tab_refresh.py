@@ -32,6 +32,7 @@ import pandas as pd
 from rich.text import Text
 from textual import work
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import Button, DataTable, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
@@ -251,7 +252,10 @@ class TabRefreshMixin:
             else:
                 styled.append(ch, style="#888888")
             i += 1
-        self.query_one("#ticker-bar", Static).update(styled)
+        try:
+            self.query_one("#ticker-bar", Static).update(styled)
+        except NoMatches:  # the terminal is closing
+            return
         self._ticker_offset += 1
     @staticmethod
     def _upsert_live_prices(snap) -> None:
